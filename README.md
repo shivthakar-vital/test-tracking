@@ -23,6 +23,7 @@ are written straight back to the sheet.
     to show
   - **Sorting**: click a column header, and click again to reverse. Status sorts by
     progress, dates sort by date, and ticket numbers sort as numbers (PROD-2 before PROD-10)
+  - **Wrap text** (on by default) shows long titles, paths and notes on several lines. Turn it off for a compact view
   - **Show empty rows** to reveal placeholder rows (e.g. run numbers with nothing filled in yet)
 - **Edit in the app, saved to the sheet**: double-click a cell.
   - Dropdown columns show the sheet's own dropdown options, with *Select several…* for

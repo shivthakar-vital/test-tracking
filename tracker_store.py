@@ -39,7 +39,7 @@ CACHE_FILE  = os.path.join(DATA_DIR, "cache.json")
 CREDS_FILE  = os.path.join(DATA_DIR, "service_account.json")
 INVENTORY_CREDS = os.path.join(_data_dir("QaveInventory"), "service_account.json")
 
-DEFAULTS = {"sheets": [], "current": "", "show_empty_rows": False}
+DEFAULTS = {"sheets": [], "current": "", "show_empty_rows": False, "wrap_text": True}
 
 
 def load_config():

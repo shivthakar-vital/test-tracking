@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.1"         # bump this for each release, then push a matching tag (v1.0.1)
+APP_VERSION = "1.0.2"         # bump this for each release, then push a matching tag (v1.0.2)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -115,6 +115,7 @@ STYLESHEET = """
 """
 
 BLANK = "(blank)"
+WRAP_MAX_LINES = 8          # taller cells are cut off; the tooltip and Edit… show all of it
 
 
 # ── small helpers ─────────────────────────────────────────────────────────────
@@ -128,6 +129,13 @@ def _natural(text):
     """Sort key that orders numbers numerically: PROD-2 before PROD-10."""
     return [(0, int(t), "") if t.isdigit() else (1, 0, t)
             for t in re.split(r"(\d+)", (text or "").lower()) if t]
+
+_ZWSP = "\u200b"
+def _breakable(text):
+    """Let wrapped text break inside long paths, versions and hashes
+    (e.g. /tmp/repo/qa/…, staging-808ec07…) by adding invisible break points."""
+    text = re.sub(r"([/_\-.:,=])(?=\S)", "\\1" + _ZWSP, text)
+    return re.sub(r"(\S{24})(?=\S)", "\\1" + _ZWSP, text)
 
 def _open_link(url):
     if url:
@@ -356,8 +364,12 @@ class TabModel(QAbstractTableModel):
         col = self.tab["columns"][c]
         value, link = row["values"][c], row["links"][c]
         if role == Qt.DisplayRole:
+            if self.page.wrap:
+                return _breakable(value)
             first = value.split("\n", 1)[0]
             return first + (" …" if "\n" in value else "")
+        if role == Qt.TextAlignmentRole:
+            return int(Qt.AlignLeft | (Qt.AlignTop if self.page.wrap else Qt.AlignVCenter))
         if role == Qt.EditRole:
             return value
         if role == Qt.ToolTipRole:
@@ -548,6 +560,19 @@ class CellDelegate(QStyledItemDelegate):
     def __init__(self, page):
         super().__init__(page)
         self.page = page
+
+    def sizeHint(self, option, index):
+        """Row height for wrapped text: at least one comfortable line, at most WRAP_MAX_LINES."""
+        size = super().sizeHint(option, index)
+        line = option.fontMetrics.lineSpacing()
+        size.setHeight(max(34, min(size.height() + 14, line * WRAP_MAX_LINES + 14)))
+        return size
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        if self.page.wrap:
+            option.rect.adjust(0, 7, 0, -7)       # breathing room above and below wrapped text
+            option.decorationAlignment = Qt.AlignLeft | Qt.AlignTop   # status dot beside the first line
 
     def createEditor(self, parent, option, index):
         col = self.page.model.tab["columns"][index.column()]
@@ -793,6 +818,11 @@ class TabPage(QWidget):
         self.empty_chk.setToolTip("Rows with nothing filled in yet, e.g. run numbers waiting for a run")
         self.empty_chk.setChecked(self.proxy.show_empty)
         self.empty_chk.toggled.connect(self._on_show_empty)
+        self.wrap = win.cfg.get("wrap_text", True)
+        self.wrap_chk = QCheckBox("Wrap text")
+        self.wrap_chk.setToolTip("Show the whole text of each cell on several lines")
+        self.wrap_chk.setChecked(self.wrap)
+        self.wrap_chk.toggled.connect(self.win.set_wrap)
         self.count_lbl = _small_label("", MUTED)
         top = QHBoxLayout()
         top.setSpacing(8)
@@ -801,6 +831,7 @@ class TabPage(QWidget):
         top.addWidget(self.extra_lbl)
         top.addWidget(self.clear_btn)
         top.addStretch(1)
+        top.addWidget(self.wrap_chk)
         top.addWidget(self.empty_chk)
         top.addWidget(self.count_lbl)
         root.addLayout(top)
@@ -818,7 +849,7 @@ class TabPage(QWidget):
         self.view.verticalHeader().setDefaultSectionSize(34)
         self.view.setAlternatingRowColors(True)
         self.view.setShowGrid(True)
-        self.view.setWordWrap(False)
+        self._apply_wrap()
         self.view.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.view.setSelectionMode(QAbstractItemView.SingleSelection)
         self.view.setEditTriggers(QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed)
@@ -957,6 +988,25 @@ class TabPage(QWidget):
     def _on_filter(self, pos, allowed):
         self.proxy.set_filter(pos, allowed)
         self._update_counts()
+
+    def set_wrap(self, on):
+        self.wrap = on
+        self.wrap_chk.blockSignals(True)
+        self.wrap_chk.setChecked(on)
+        self.wrap_chk.blockSignals(False)
+        self._apply_wrap()
+        self.model.layoutChanged.emit()          # re-read the text with or without break points
+
+    def _apply_wrap(self):
+        self.view.setWordWrap(self.wrap)
+        self.view.setTextElideMode(Qt.ElideRight)
+        # wrapped rows grow to fit their text (and re-fit when a column is resized)
+        self.view.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents if self.wrap else QHeaderView.Fixed)
+        if not self.wrap:
+            self.view.verticalHeader().setDefaultSectionSize(34)
+            for r in range(self.proxy.rowCount()):
+                self.view.setRowHeight(r, 34)
 
     def _on_show_empty(self, on):
         self.proxy.show_empty = on
@@ -1416,6 +1466,13 @@ class TrackerApp(QMainWindow):
             self.dashboard.setWidget(QLabel())
         self._fill_releases()
         self._connect()
+
+    def set_wrap(self, on):
+        """The Wrap text switch applies to every tab and is remembered."""
+        self.cfg["wrap_text"] = on
+        store.save_config(self.cfg)
+        for page in self.pages.values():
+            page.set_wrap(on)
 
     def _open_sheet(self):
         page = self.tabs.currentWidget()
