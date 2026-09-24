@@ -1,5 +1,7 @@
 # Test Tracker
 
+**[⬇ Install](#install)** · [Step-by-step guide](INSTALL.md) · [Latest release](https://github.com/shivthakar-vital/test-tracking/releases/latest)
+
 A desktop dashboard for software release testing. It reads the team's test-tracking
 **Google Sheet**, shows where testing stands at a glance, and lets you update cells, which
 are written straight back to the sheet.
