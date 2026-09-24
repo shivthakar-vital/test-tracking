@@ -339,7 +339,7 @@ class SheetSource:
     def _fresh_values(self, tab):
         """Current cell text of the whole tab, as a list of rows (0-based sheet rows)."""
         from gspread.utils import ValueRenderOption
-        return self.book.worksheet_by_id(tab["id"]).get_all_values(
+        return self.book.get_worksheet_by_id(tab["id"]).get_all_values(
             value_render_option=ValueRenderOption.formatted)
 
     # ── writing ───────────────────────────────────────────────────────────────
