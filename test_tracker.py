@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.0"         # bump this for each release, then push a matching tag (v1.0.0)
+APP_VERSION = "1.0.1"         # bump this for each release, then push a matching tag (v1.0.1)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -863,12 +863,43 @@ class TabPage(QWidget):
         vscroll = self.view.verticalScrollBar().value()
         hscroll = self.view.horizontalScrollBar().value()
 
+        # Filters, sorting, widths and the selection are tied to columns by name, so
+        # they stay on the right column when columns are added, moved or removed.
+        old_cols = self.model.tab["columns"]
+        new_pos = {c["name"]: c["pos"] for c in tab["columns"]}
+        moved = {c["pos"]: new_pos.get(c["name"]) for c in old_cols}
+        widths = {c["name"]: self.view.columnWidth(c["pos"]) for c in old_cols}
+        sort_col, sort_order = self.proxy.sortColumn(), self.proxy.sortOrder()
+        if any(old != new for old, new in moved.items()):
+            self.proxy.filters = {moved[p]: v for p, v in self.proxy.filters.items()
+                                  if moved.get(p) is not None}
+            btns = {}
+            for p, btn in self.filter_btns.items():
+                if moved.get(p) is None:
+                    btn.deleteLater()
+                else:
+                    btns[moved[p]] = btn
+            self.filter_btns = btns
+            if keep:
+                keep = (keep[0], moved.get(keep[1]))
+            sort_col = moved.get(sort_col, -1) if sort_col >= 0 else -1
+
         self.model.set_tab(tab)
         self._build_filters(tab)
-        self.proxy.invalidateFilter()
         if first:
             self._size_columns()
-        if keep:
+        else:
+            for c in tab["columns"]:
+                if c["name"] in widths:
+                    self.view.setColumnWidth(c["pos"], widths[c["name"]])
+                else:                                  # a new column: fit it to its contents
+                    self.view.resizeColumnToContents(c["pos"])
+                    w = self.view.columnWidth(c["pos"])
+                    self.view.setColumnWidth(c["pos"], max(90, min(w + 16, 340)))
+            if sort_col != self.proxy.sortColumn():
+                self.view.sortByColumn(sort_col, sort_order)
+        self.proxy.invalidateFilter()
+        if keep and keep[1] is not None:
             for r, row in enumerate(tab["rows"]):
                 if row["r"] == keep[0]:
                     idx = self.proxy.mapFromSource(self.model.index(r, keep[1]))

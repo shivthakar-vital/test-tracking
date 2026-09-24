@@ -345,6 +345,35 @@ class SheetSource:
     # ── writing ───────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _current_layout(tab, fresh):
+        """`tab` with each column's sheet index looked up again by its header name,
+        so a write lands in the right column even if columns were inserted, moved
+        or deleted since the last sync. Values stay keyed by position (`pos`)."""
+        names = [c["name"].strip().lower() for c in tab["columns"]]
+
+        def header_map(r):
+            cells = [v.strip().lower() for v in fresh[r]] if r < len(fresh) else []
+            found, used = {}, set()
+            for pos, name in enumerate(names):
+                idx = next((i for i, v in enumerate(cells) if v == name and i not in used), None)
+                if idx is None:
+                    return None
+                found[pos] = idx
+                used.add(idx)
+            return found
+
+        header = tab.get("header_row", 0)
+        found = header_map(header)
+        if found is None:                              # rows added above the header
+            header = next((r for r in range(min(len(fresh), 50)) if header_map(r)), None)
+            found = header_map(header) if header is not None else None
+        if found is None:
+            raise ConflictError("A column in this tab was renamed or deleted since your last "
+                                "sync. The latest data has been loaded — please try again.")
+        cols = [dict(c, index=found[c["pos"]]) for c in tab["columns"]]
+        return dict(tab, columns=cols, header_row=header)
+
+    @staticmethod
     def _cell_data(col, value, link=None):
         value = value if value is not None else ""
         if value == "":
@@ -394,6 +423,8 @@ class SheetSource:
     def write_cell(self, tab, row, col, new, old, link=None, force=False):
         """Set one cell. `link` is only passed for link cells (text + URL)."""
         fresh = self._fresh_values(tab)
+        tab = self._current_layout(tab, fresh)
+        col = tab["columns"][col["pos"]]
         r = self._locate(tab, row, fresh)
         current = fresh[r][col["index"]] if col["index"] < len(fresh[r]) else ""
         if current.strip() != old.strip() and not force:
@@ -409,6 +440,7 @@ class SheetSource:
         (e.g. run number 4 with nothing else in it) if there is one, else
         appends a row to the end of the table."""
         fresh = self._fresh_values(tab)
+        tab = self._current_layout(tab, fresh)
         cols = tab["columns"]
         first_col = cols[0]
         target = None
