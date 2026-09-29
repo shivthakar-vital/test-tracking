@@ -14,7 +14,7 @@ Build a double-clickable app:
     ./build_mac.sh
 """
 
-import json, re, subprocess, sys, urllib.request
+import re, subprocess, sys
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.3"         # bump this for each release, then push a matching tag (v1.0.3)
+APP_VERSION = "1.0.4"         # bump this for each release, then push a matching tag (v1.0.4)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1537,6 +1537,9 @@ class TrackerApp(QMainWindow):
         self.timer.start(REFRESH_MS)
         QTimer.singleShot(0, self._start)
         QTimer.singleShot(1500, self._check_for_update)
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self._check_for_update)
+        self.update_timer.start(3600 * 1000)          # and again every hour
 
     def _build_ui(self):
         central = QWidget()
@@ -1588,9 +1591,13 @@ class TrackerApp(QMainWindow):
         status_row.addWidget(self.update_btn)
         status_row.addSpacing(10)
         status_row.addWidget(self.conn_lbl)
-        version_lbl = _small_label(f"v{APP_VERSION}", MUTED)
-        version_lbl.setStyleSheet(f"color:{MUTED}; font-size:11px; margin-left:10px;")
-        status_row.addWidget(version_lbl)
+        version_btn = QPushButton(f"v{APP_VERSION}")
+        version_btn.setObjectName("link")
+        version_btn.setStyleSheet(f"color:{MUTED}; font-size:11px; margin-left:6px;")
+        version_btn.setCursor(Qt.PointingHandCursor)
+        version_btn.setToolTip("Check for updates")
+        version_btn.clicked.connect(lambda: self._check_for_update(manual=True))
+        status_row.addWidget(version_btn)
         root.addLayout(status_row)
 
         QShortcut(QKeySequence("Ctrl+R"), self, lambda: self._sync(quiet=False))
@@ -1909,12 +1916,26 @@ class TrackerApp(QMainWindow):
 
     # ── updates ───────────────────────────────────────────────────────────────
 
-    def _check_for_update(self):
+    def _check_for_update(self, manual=False):
+        """Look for a newer release on GitHub. Runs at launch, every hour, and when
+        the version number in the bottom-right corner is clicked."""
         def latest():
-            req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
-                                         headers={"Accept": "application/vnd.github+json"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                return json.load(r).get("tag_name", "")
+            import requests          # bundles its own certificates, unlike urllib in the built app
+            try:
+                r = requests.get(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                 headers={"Accept": "application/vnd.github+json"}, timeout=8)
+                r.raise_for_status()
+                return r.json()["tag_name"]
+            except Exception:
+                # GitHub's API allows 60 checks an hour per network; the release page
+                # has no such limit, and redirects to …/releases/tag/vX.Y.Z
+                r = requests.head(f"https://github.com/{REPO}/releases/latest",
+                                  allow_redirects=True, timeout=8)
+                r.raise_for_status()
+                tag = r.url.rstrip("/").rsplit("/", 1)[-1]
+                if not _version_tuple(tag):
+                    raise RuntimeError("no release found")
+                return tag
 
         task = _Task(latest)
 
@@ -1925,12 +1946,27 @@ class TrackerApp(QMainWindow):
                 self.update_btn.setText(f"⬆ Update to {tag}")
                 self.update_btn.setToolTip("A newer version is available. Click to install it.")
                 self.update_btn.show()
+                if manual:
+                    self._install_update()
+            elif manual:
+                QMessageBox.information(self, "No updates",
+                                        f"You have the latest version (v{APP_VERSION}).")
+
+        def failed(exc):
+            self._tasks.discard(task)
+            if manual:
+                reply = QMessageBox.question(
+                    self, "Couldn't check for updates",
+                    f"Couldn't reach GitHub to check for updates ({type(exc).__name__}).\n\n"
+                    "Open the releases page in your browser instead?",
+                    QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    _open_link(f"https://github.com/{REPO}/releases/latest")
 
         task.signals.done.connect(got)
-        task.signals.failed.connect(lambda _: self._tasks.discard(task))   # offline: try next launch
+        task.signals.failed.connect(failed)
         self._tasks.add(task)
         self.net_pool.start(task)
-        QTimer.singleShot(6 * 3600 * 1000, self._check_for_update)
 
     def _install_update(self):
         if not (getattr(sys, "frozen", False) and sys.platform == "darwin"):

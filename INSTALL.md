@@ -40,7 +40,11 @@ The dashboard loads, and the bottom-right corner shows **● Google Sheets · sy
 When a new version is out, a blue **⬆ Update to v…** button appears in the bottom-right
 corner. Click it: the app closes, updates, and reopens by itself.
 
-You can also update by running the Step 1 line again.
+The app checks when it opens and every hour after that. To check right now, click the
+version number (e.g. **v1.0.4**) in the bottom-right corner.
+
+You can also update by running the Step 1 line again. **If you have v1.0.3 or older**,
+do that once: those versions can't see new updates by themselves.
 
 ---
 
