@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QDialog, QFormLayout, QDialogButtonBox, QFileDialog, QShortcut, QComboBox,
     QCheckBox, QTabWidget, QScrollArea, QStyledItemDelegate, QDateEdit, QMenu,
     QToolButton, QWidgetAction, QListWidget, QListWidgetItem, QPlainTextEdit,
-    QAbstractItemView, QListView, QSizePolicy
+    QAbstractItemView, QListView, QSizePolicy, QColorDialog, QInputDialog
 )
 from PyQt5.QtCore import (
     Qt, QObject, QRunnable, QThreadPool, QTimer, QUrl, QDate, pyqtSignal,
@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.2"         # bump this for each release, then push a matching tag (v1.0.2)
+APP_VERSION = "1.0.3"         # bump this for each release, then push a matching tag (v1.0.3)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -245,6 +245,15 @@ class SettingsDialog(QDialog):
             "Share every sheet with the service-account email above as an Editor.", MUTED)
         hint.setWordWrap(True)
 
+        colors_btn = QPushButton("🎨 Chart colours…")
+        colors_btn.setToolTip("Admin only: change the colour of each status, for everyone")
+        colors_btn.clicked.connect(lambda: parent.open_colors(self))
+        colors_btn.setEnabled(bool(parent.data) and parent.can_edit)
+        admin_row = QHBoxLayout()
+        admin_row.addWidget(colors_btn)
+        admin_row.addWidget(_small_label("🔒 Needs the admin passcode. Colours apply to everyone "
+                                         "using this release sheet.", MUTED), 1)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -260,6 +269,9 @@ class SettingsDialog(QDialog):
         root.addWidget(_small_label("Service account (the robot account the app signs in with)"))
         root.addLayout(creds_row)
         root.addWidget(hint)
+        root.addSpacing(6)
+        root.addWidget(_small_label("Admin"))
+        root.addLayout(admin_row)
         root.addWidget(buttons)
 
     def _fill_list(self):
@@ -310,6 +322,179 @@ class SettingsDialog(QDialog):
         if self.url.text().strip():
             self._add()
         super().accept()
+
+
+# ── admin: passcode and chart colours ─────────────────────────────────────────
+
+class NewPasscodeDialog(QDialog):
+    def __init__(self, parent, title="Set an admin passcode", intro=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(420)
+        root = QVBoxLayout(self)
+        lbl = QLabel(intro or "Choose a passcode for admin settings like chart colours. "
+                              "Anyone who knows it can change them, so share it only with "
+                              "other admins.")
+        lbl.setWordWrap(True)
+        root.addWidget(lbl)
+        form = QFormLayout()
+        self.first, self.second = QLineEdit(), QLineEdit()
+        for box in (self.first, self.second):
+            box.setEchoMode(QLineEdit.Password)
+        form.addRow("New passcode", self.first)
+        form.addRow("Type it again", self.second)
+        root.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def accept(self):
+        if len(self.first.text()) < 4:
+            QMessageBox.warning(self, "Too short", "Use at least 4 characters.")
+            return
+        if self.first.text() != self.second.text():
+            QMessageBox.warning(self, "Doesn't match", "The two passcodes are different.")
+            return
+        super().accept()
+
+    def passcode(self):
+        return self.first.text()
+
+
+class ColorsDialog(QDialog):
+    """Pick the colour for each status value. Applies to every chart, card and status dot."""
+
+    def __init__(self, win, data, overrides):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Chart colours")
+        self.setMinimumWidth(620)
+        self.overrides = dict(overrides)
+        self.changed_passcode = None
+
+        # every status value in the sheet, with the tabs it's used in
+        found, order = {}, []
+        for tab in data["tabs"]:
+            col = store.status_column(tab)
+            if not col:
+                continue
+            values = list(col["options"]) + [r["values"][col["pos"]].strip() for r in _visible_rows(tab)]
+            for v in charts.status_order(dict.fromkeys(values), col["options"]):
+                key = v.strip().lower()
+                if key not in found:
+                    found[key] = {"label": v.strip() or "No status", "tabs": [], "options": col["options"]}
+                    order.append(key)
+                if tab["title"] not in found[key]["tabs"]:
+                    found[key]["tabs"].append(tab["title"])
+        self.found, self.order = found, order
+
+        intro = QLabel("Click a colour to change it. Your choices are saved in the sheet, so "
+                       "everyone sees them after their next sync. Statuses keep their built-in "
+                       "colour until you change them.")
+        intro.setWordWrap(True)
+        self.rows = QGridLayout()
+        self.rows.setHorizontalSpacing(12)
+        self.rows.setVerticalSpacing(6)
+        self.swatches, self.resets = {}, {}
+        for i, key in enumerate(order):
+            info = found[key]
+            sw = QPushButton()
+            sw.setFixedSize(46, 26)
+            sw.setCursor(Qt.PointingHandCursor)
+            sw.clicked.connect(lambda _, k=key: self._pick(k))
+            name = QLabel(info["label"])
+            name.setStyleSheet("font-size:13px;")
+            where = _small_label(", ".join(info["tabs"]), MUTED)
+            where.setToolTip("Used in: " + ", ".join(info["tabs"]))
+            reset = QPushButton("Reset")
+            reset.setObjectName("link")
+            reset.setToolTip("Go back to the built-in colour")
+            reset.clicked.connect(lambda _, k=key: self._reset(k))
+            self.swatches[key], self.resets[key] = sw, reset
+            self.rows.addWidget(sw, i, 0)
+            self.rows.addWidget(name, i, 1)
+            self.rows.addWidget(where, i, 2)
+            self.rows.addWidget(reset, i, 3)
+        self.rows.setColumnStretch(2, 1)
+        inner = QWidget()
+        inner.setLayout(self.rows)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(inner)
+        scroll.setMinimumHeight(min(34 * len(order) + 10, 380))
+
+        self.preview = charts.DonutChart()
+        preview_box = QFrame()
+        preview_box.setObjectName("card")
+        pl = QVBoxLayout(preview_box)
+        pl.addWidget(_small_label("PREVIEW", "#888885", 10))
+        pl.addWidget(self.preview)
+
+        reset_all = QPushButton("Reset all to built-in colours")
+        reset_all.clicked.connect(self._reset_all)
+        passcode_btn = QPushButton("Change admin passcode…")
+        passcode_btn.clicked.connect(self._change_passcode)
+        extra = QHBoxLayout()
+        extra.addWidget(reset_all)
+        extra.addWidget(passcode_btn)
+        extra.addStretch(1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        save = buttons.addButton("Save for everyone", QDialogButtonBox.AcceptRole)
+        save.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
+        root.addWidget(intro)
+        if not order:
+            root.addWidget(_small_label("No status columns found in this sheet yet.", MUTED))
+        root.addWidget(scroll)
+        root.addWidget(preview_box)
+        root.addLayout(extra)
+        root.addWidget(buttons)
+        self._refresh()
+
+    def _default(self, key):
+        info = self.found[key]
+        value = next((o for o in info["options"] if o.strip().lower() == key), info["label"] if key else "")
+        return charts.status_colors([value], info["options"], use_overrides=False)[value]
+
+    def color(self, key):
+        return self.overrides.get(key) or self._default(key)
+
+    def _refresh(self):
+        for key, sw in self.swatches.items():
+            c = self.color(key)
+            sw.setStyleSheet(f"QPushButton {{ background:{c}; border:1px solid #BDBBB6; border-radius:5px; }}"
+                             f"QPushButton:hover {{ border:2px solid #1A1A18; }}")
+            sw.setToolTip(f"{c.upper()} — click to change")
+            self.resets[key].setVisible(key in self.overrides)
+        self.preview.set_data([(self.found[k]["label"], 1, self.color(k)) for k in self.order[:10]],
+                              ("", ""))
+
+    def _pick(self, key):
+        c = QColorDialog.getColor(QColor(self.color(key)), self, f"Colour for {self.found[key]['label']}")
+        if c.isValid():
+            self.overrides[key] = c.name().upper()
+            self._refresh()
+
+    def _reset(self, key):
+        self.overrides.pop(key, None)
+        self._refresh()
+
+    def _reset_all(self):
+        self.overrides.clear()
+        self._refresh()
+
+    def _change_passcode(self):
+        dlg = NewPasscodeDialog(self, "Change admin passcode", "Choose a new admin passcode. "
+                                "It takes effect when you click Save for everyone.")
+        if dlg.exec_() == QDialog.Accepted:
+            self.changed_passcode = dlg.passcode()
 
 
 # ── table model, sorting and filtering ────────────────────────────────────────
@@ -1582,6 +1767,7 @@ class TrackerApp(QMainWindow):
 
     def _show_data(self, data):
         self.data = data
+        charts.set_overrides(store.color_overrides(data.get("settings")))
         self.setWindowTitle(f"{APP_TITLE} — {data['title']}")
         titles = [t["title"] for t in data["tabs"]]
         for title in list(self.pages):
@@ -1672,6 +1858,54 @@ class TrackerApp(QMainWindow):
             else:
                 self.url = ""
                 self._set_conn("none")
+
+    # ── admin: chart colours ──────────────────────────────────────────────────
+
+    def open_colors(self, parent=None):
+        parent = parent or self
+        if not (self.data and self.can_edit and self.source):
+            QMessageBox.information(parent, "Not connected",
+                                    "Connect to the Google Sheet first, then try again.")
+            return
+        settings = dict(self.data.get("settings") or {})
+        stored = settings.get(store.PASSCODE_KEY)
+        if not stored:
+            dlg = NewPasscodeDialog(parent)
+            if dlg.exec_() != QDialog.Accepted:
+                return
+            settings[store.PASSCODE_KEY] = store.hash_passcode(dlg.passcode())
+            self.admin_unlocked = self.url
+        elif getattr(self, "admin_unlocked", None) != self.url:
+            code, ok = QInputDialog.getText(parent, "Admin passcode",
+                                            "Enter the admin passcode to change chart colours:",
+                                            QLineEdit.Password)
+            if not ok:
+                return
+            if not store.check_passcode(code, stored):
+                QMessageBox.warning(parent, "Wrong passcode",
+                                    "That passcode isn't right.\n\nForgot it? See “Admin "
+                                    "passcode” in the README for how to reset it.")
+                return
+            self.admin_unlocked = self.url          # don't ask again until the app restarts
+        dlg = ColorsDialog(self, self.data, store.color_overrides(settings))
+        if dlg.exec_() != QDialog.Accepted:
+            if settings.get(store.PASSCODE_KEY) != stored:
+                self._save_settings(settings, "Admin passcode set.")   # keep a newly set passcode
+            return
+        settings = {k: v for k, v in settings.items() if not k.startswith(store.COLOR_PREFIX)}
+        settings.update({store.COLOR_PREFIX + k: v for k, v in dlg.overrides.items()})
+        if dlg.changed_passcode:
+            settings[store.PASSCODE_KEY] = store.hash_passcode(dlg.changed_passcode)
+        self._save_settings(settings, "Chart colours saved for everyone.")
+
+    def _save_settings(self, settings, msg):
+        src = self.source
+        def saved(_):
+            self.data["settings"] = settings
+            self._show_data(self.data)
+            store.save_cache(self.url, self.data)
+            self._set_status(msg)
+        self._run(lambda: src.save_settings(settings), saved, busy_msg="Saving settings…")
 
     # ── updates ───────────────────────────────────────────────────────────────
 

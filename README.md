@@ -55,7 +55,7 @@ every time it syncs:
 - The **status column** is the dropdown whose name contains "Status" (e.g. *Current
   Status*, *Atlantis Status*). Charts are grouped by the other dropdowns and by short text
   columns that repeat, like *System* or *Assignee*.
-- Status colors follow meaning: *Completed / Done / Results* are green, *In Progress*
+- Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results* are green, *In Progress*
   blue, *Blocked / Error* red, *Cancelled* orange, *No results* yellow, *Not Started /
   Created* gray, and *Deferred* dark gray.
 - Tabs whose name contains **"Automated"** (filled in from Jira) are read-only in the app.
@@ -68,6 +68,30 @@ every time it syncs:
    dropdown and paste the link. You can switch between releases from that dropdown.
 2. **New tab in the same file**: duplicate a tab and rename it. It shows up by itself on the
    next sync.
+
+## Admin: chart colours
+
+Each status gets a colour automatically (see above). To choose your own:
+
+1. Click **⚙ Settings → 🎨 Chart colours…**
+2. The first time, set an **admin passcode**. After that, the app asks for it once per session.
+3. Click a colour next to any status to change it. **Reset** goes back to the built-in colour.
+4. Click **Save for everyone**.
+
+The colours apply to every chart, summary card, and status dot, for everyone using that
+release sheet, after their next sync (within a minute). Statuses are matched by name, so
+*Blocked* gets the same colour on every tab.
+
+The colours and passcode are saved in a hidden tab of the sheet called
+**Test Tracker Settings**, so a release sheet made with *File → Make a copy* keeps them. The
+passcode is stored only as a one-way hash.
+
+> The passcode keeps people from changing colours by accident. It isn't strong security:
+> anyone who can edit the Google Sheet could also edit the hidden tab.
+
+**Forgot the passcode?** In Google Sheets, open **View → Hidden sheets → Test Tracker
+Settings**, delete the `admin_passcode` row, and hide the tab again. The next time you open
+🎨 Chart colours, the app asks you to set a new passcode. Your colours are kept.
 
 ## Install
 

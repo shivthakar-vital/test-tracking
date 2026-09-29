@@ -52,24 +52,34 @@ def classify(value):
     return "other"
 
 
-def status_colors(values, options=()):
-    """{value: color}. Known meanings get their status color; others take the
-    categorical slots in the dropdown's option order, so a value keeps its color
-    even when filters change which values are on screen."""
-    colors, used = {}, 0
+OVERRIDES = {}      # {status value (lower case): color}, chosen by the admin in the app
+
+def set_overrides(colors):
+    OVERRIDES.clear()
+    OVERRIDES.update(colors or {})
+
+
+def status_colors(values, options=(), use_overrides=True):
+    """{value: color}. The admin's choices come first. Otherwise known meanings
+    get their status color, and others take the categorical slots in the
+    dropdown's option order (skipping colors already on screen), so a value
+    keeps its color even when filters change which values are shown."""
+    colors, unknown = {}, []
     ordered = list(options) + sorted(set(values) - set(options))
     for v in ordered:
         low = (v or "").strip().lower()
-        if not low:
+        if use_overrides and low in OVERRIDES:
+            colors[v] = OVERRIDES[low]
+        elif not low:
             colors[v] = PENDING
-            continue
-        for words, _, color in _RULES:
-            if any(w in low for w in words):
-                colors[v] = color
-                break
         else:
-            colors[v] = CATEGORICAL[used % len(CATEGORICAL)]
-            used += 1
+            colors[v] = next((color for words, _, color in _RULES if any(w in low for w in words)), None)
+            if colors[v] is None:
+                unknown.append(v)
+    taken = {c.upper() for c in colors.values() if c}
+    free = [c for c in CATEGORICAL if c.upper() not in taken] or CATEGORICAL
+    for i, v in enumerate(unknown):
+        colors[v] = free[i % len(free)]
     return colors
 
 

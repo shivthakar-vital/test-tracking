@@ -16,7 +16,7 @@ where it was and the cell still holds what the user saw, so edits made by other
 people (or typed straight into the sheet) are never silently overwritten.
 """
 
-import json, os, re, shutil, sys
+import hashlib, hmac, json, os, re, secrets, shutil, sys
 from datetime import date, datetime
 
 APP_NAME = "TestTracker"
@@ -101,6 +101,33 @@ def sheet_id(url):
 
 def tab_url(url, tab):
     return f"https://docs.google.com/spreadsheets/d/{sheet_id(url)}/edit#gid={tab['id']}"
+
+
+# ── shared app settings (colours, admin passcode) ─────────────────────────────
+# These live in a hidden tab of the sheet, so every install sees the same ones
+# and a copied release sheet keeps them.
+
+SETTINGS_TAB = "Test Tracker Settings"
+PASSCODE_KEY = "admin_passcode"
+COLOR_PREFIX = "color:"
+
+def hash_passcode(passcode):
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", passcode.encode(), bytes.fromhex(salt), 200_000)
+    return f"pbkdf2${salt}${digest.hex()}"
+
+def check_passcode(passcode, stored):
+    try:
+        _, salt, want = stored.split("$")
+        got = hashlib.pbkdf2_hmac("sha256", passcode.encode(), bytes.fromhex(salt), 200_000)
+    except (ValueError, AttributeError):
+        return False
+    return hmac.compare_digest(got.hex(), want)
+
+def color_overrides(settings):
+    """{status value (lower case): "#RRGGBB"} chosen by the admin."""
+    return {k[len(COLOR_PREFIX):]: v for k, v in (settings or {}).items()
+            if k.startswith(COLOR_PREFIX) and re.fullmatch(r"#[0-9A-Fa-f]{6}", v)}
 
 
 # ── errors ────────────────────────────────────────────────────────────────────
@@ -242,20 +269,30 @@ class SheetSource:
         meta = self.book.fetch_sheet_metadata({
             "fields": "properties.title,sheets(properties(sheetId,title,hidden,index),"
                       "tables(tableId,range,columnProperties))"})
-        visible = [s for s in meta["sheets"] if not s["properties"].get("hidden")]
+        settings_sheet = next((s for s in meta["sheets"]
+                               if s["properties"]["title"] == SETTINGS_TAB), None)
+        visible = [s for s in meta["sheets"]
+                   if not s["properties"].get("hidden") and s is not settings_sheet]
         grids = {}
-        if visible:
+        wanted = visible + ([settings_sheet] if settings_sheet else [])
+        if wanted:
             got = self.book.fetch_sheet_metadata({
                 "includeGridData": "true",
-                "ranges": [_quote(s["properties"]["title"]) for s in visible],
+                "ranges": [_quote(s["properties"]["title"]) for s in wanted],
                 "fields": "sheets(properties.sheetId,data(rowData(values(formattedValue,hyperlink,"
                           "userEnteredValue/formulaValue,dataValidation/condition))))"})
             for s in got["sheets"]:
                 data = s.get("data") or [{}]
                 grids[s["properties"]["sheetId"]] = data[0].get("rowData", [])
         tabs = [self._parse_tab(s, grids.get(s["properties"]["sheetId"], [])) for s in visible]
+        settings = {}
+        if settings_sheet:
+            for row in grids.get(settings_sheet["properties"]["sheetId"], [])[1:]:
+                vals = [v.get("formattedValue", "").strip() for v in row.get("values", [])]
+                if len(vals) >= 2 and vals[0]:
+                    settings[vals[0]] = vals[1]
         return {"title": meta["properties"]["title"], "url": self.url,
-                "tabs": [t for t in tabs if t["columns"]],
+                "tabs": [t for t in tabs if t["columns"]], "settings": settings,
                 "fetched_at": datetime.now().isoformat(timespec="seconds")}
 
     @staticmethod
@@ -343,6 +380,19 @@ class SheetSource:
             value_render_option=ValueRenderOption.formatted)
 
     # ── writing ───────────────────────────────────────────────────────────────
+
+    def save_settings(self, settings):
+        """Write the shared settings to the hidden settings tab (made on first use)."""
+        import gspread
+        try:
+            ws = self.book.worksheet(SETTINGS_TAB)
+        except gspread.WorksheetNotFound:
+            ws = self.book.add_worksheet(SETTINGS_TAB, rows=100, cols=2)
+            self.book.batch_update({"requests": [{"updateSheetProperties": {
+                "properties": {"sheetId": ws.id, "hidden": True}, "fields": "hidden"}}]})
+        rows = [["setting", "value"]] + [[k, v] for k, v in sorted(settings.items())]
+        ws.clear()
+        ws.update(rows, "A1", value_input_option="RAW")
 
     @staticmethod
     def _current_layout(tab, fresh):
