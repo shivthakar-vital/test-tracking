@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.5"         # bump this for each release, then push a matching tag (v1.0.5)
+APP_VERSION = "1.0.6"         # bump this for each release, then push a matching tag (v1.0.6)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -527,29 +527,34 @@ class ColumnsDialog(QDialog):
             for c in cols:
                 key = c["name"].strip().lower()
                 info = found.setdefault(key, {"name": c["name"].strip(), "tabs": [],
-                                              "filter": False, "chart": False})
+                                              "filter": False, "chart": False, "pie": False,
+                                              "dropdown": False})
                 if key not in order:
                     order.append(key)
                 info["tabs"].append(tab["title"])
-                for purpose in ("filter", "chart"):
+                info["dropdown"] |= c["kind"] == "dropdown" and not c.get("derived")
+                for purpose in ("filter", "chart", "pie"):
                     info[purpose] |= store._default_on(tab, rows, c, purpose)
         self.found, self.order = found, order
 
-        intro = QLabel("Choose which columns get a <b>filter</b> button on their tab and a "
-                       "<b>chart</b> next to the status donut on the dashboard. Turn these off "
+        intro = QLabel("Choose which columns get a <b>filter</b> button on their tab, a bar "
+                       "<b>chart</b> (status by that column), or their own <b>pie</b> chart "
+                       "(dropdowns only, e.g. “Why?”) on the dashboard. Turn these off "
                        "for columns full of generated or one-off values, like run names or "
                        "patient names. Applies to everyone using this release sheet.")
         intro.setWordWrap(True)
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(4)
-        for i, text in enumerate(("Column", "Filter", "Chart", "Used in")):
+        for i, text in enumerate(("Column", "Filter", "Chart", "Pie", "Used in")):
             grid.addWidget(_small_label(text.upper(), "#888885", 10), 0, i)
         self.boxes = {}
         for i, key in enumerate(order, start=1):
             info = found[key]
             grid.addWidget(QLabel(info["name"]), i, 0)
-            for j, purpose in enumerate(("filter", "chart"), start=1):
+            for j, purpose in enumerate(("filter", "chart", "pie"), start=1):
+                if purpose == "pie" and not info["dropdown"]:
+                    continue                               # pies are for set categories
                 box = QCheckBox()
                 choice = self.settings.get(self._key(purpose, key))
                 box.setChecked(choice == "on" if choice in ("on", "off") else info[purpose])
@@ -558,8 +563,8 @@ class ColumnsDialog(QDialog):
                 self.boxes[(purpose, key)] = box
             where = _small_label(", ".join(dict.fromkeys(info["tabs"])), MUTED)
             where.setToolTip(where.text())
-            grid.addWidget(where, i, 3)
-        grid.setColumnStretch(3, 1)
+            grid.addWidget(where, i, 4)
+        grid.setColumnStretch(4, 1)
         inner = QWidget()
         inner.setLayout(grid)
         scroll = QScrollArea()
@@ -594,7 +599,8 @@ class ColumnsDialog(QDialog):
 
     @staticmethod
     def _key(purpose, key):
-        return (store.FILTER_PREFIX if purpose == "filter" else store.CHART_PREFIX) + key
+        return {"filter": store.FILTER_PREFIX, "chart": store.CHART_PREFIX,
+                "pie": store.PIE_PREFIX}[purpose] + key
 
     def _reset(self):
         for (purpose, key), box in self.boxes.items():
@@ -603,7 +609,7 @@ class ColumnsDialog(QDialog):
     def result_settings(self):
         """Only choices that differ from the built-in default are stored."""
         out = {k: v for k, v in self.settings.items()
-               if not k.startswith((store.FILTER_PREFIX, store.CHART_PREFIX))}
+               if not k.startswith((store.FILTER_PREFIX, store.CHART_PREFIX, store.PIE_PREFIX))}
         for (purpose, key), box in self.boxes.items():
             if box.isChecked() != self.found[key][purpose]:
                 out[self._key(purpose, key)] = "on" if box.isChecked() else "off"
@@ -1583,6 +1589,16 @@ class Dashboard(QScrollArea):
         donut.picked.connect(lambda v, t=tab["title"]: self.win.show_tab(t, {pos: {v}}))
         charts_row.addWidget(self._titled(status["name"], donut), 0, Qt.AlignTop)
 
+        pies = store.pie_columns(tab, rows, _settings(self.win))
+        for pc in pies:
+            charts_row.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
+        bars_row = charts_row
+        if pies:                                  # donuts on top, bar charts get their own row
+            charts_row.addStretch(1)
+            lay.addLayout(charts_row)
+            bars_row = QHBoxLayout()
+            bars_row.setSpacing(28)
+
         for g in store.chart_columns(tab, rows, _settings(self.win), limit=3):
             groups = defaultdict(Counter)
             for r in rows:
@@ -1606,9 +1622,11 @@ class Dashboard(QScrollArea):
                 title = f"Runs per {g['name']}"
             else:
                 title = f"{status['name']} by {g['name']}"
-            charts_row.addWidget(self._titled(title, bars), 1, Qt.AlignTop)
-        charts_row.addStretch(0)
-        lay.addLayout(charts_row)
+            bars_row.addWidget(self._titled(title, bars), 1, Qt.AlignTop)
+        if bars_row is charts_row:
+            charts_row.addStretch(0)
+        if bars_row.count():
+            lay.addLayout(bars_row)
 
         dcol = store.date_column(tab)
         if dcol:
@@ -1627,6 +1645,28 @@ class Dashboard(QScrollArea):
                                          self.win.show_tab(t, {dp: raw[ds[0]], pos: {ds[1]}}))
                 lay.addWidget(self._titled(f"Per day ({dcol['name']})", col_chart))
         return card
+
+    def _pie(self, tab, rows, st, col):
+        """A donut of set categories, e.g. "Why?" a run failed. Failed rows that
+        have no category yet show as "Not set", so it's clear what's left to fill in."""
+        counts = Counter()
+        for r in rows:
+            vals = [p.strip() for p in store.parts(col, r["values"][col["pos"]]) if p.strip()]
+            if vals:
+                counts.update(vals)
+            elif charts.classify(st[id(r)]) in ("blocked", "cancelled", "warning"):
+                counts[""] += 1
+        options = list(col["options"]) + sorted(v for v in counts if v and v not in col["options"])
+        palette = {v: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, v in enumerate(options)}
+        slices = [(v, counts[v], palette[v]) for v in options if counts[v]]
+        if counts[""]:
+            slices.append(("Not set", counts[""], charts.PENDING))
+        pie = charts.DonutChart()
+        set_n = sum(n for v, n in counts.items() if v)
+        pie.set_data(slices, (str(set_n), "with a reason" if counts[""] else "total"))
+        pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]:
+                           self.win.show_tab(t, {p: {"" if v == "Not set" else v}}))
+        return self._titled(col["name"], pie)
 
     @staticmethod
     def _titled(title, widget):

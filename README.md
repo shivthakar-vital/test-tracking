@@ -64,6 +64,9 @@ every time it syncs:
   *Software Version*) get no filter or chart. Other dropdowns and short, repeating text
   columns (like *System* or *Assignee*) do. *Workflow Type* and *Equipment* have filters
   but no charts. An admin can change any of this (see below).
+- **Category pies:** dropdown columns named like *Why?*, *Reason*, *Cause*, or *Category*
+  get their own donut next to the status donut, with one fixed colour per option. Failed
+  runs with no category yet show as a gray **Not set** slice. Click a slice to see those rows.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results* are green, *In Progress*
   blue, *Blocked / Error* red, *Cancelled* orange, *No results* yellow, *Not Started /
@@ -82,7 +85,8 @@ every time it syncs:
 ## Admin: charts & filters
 
 Click **⚙ Settings → 📊 Charts & filters…** (admin passcode) to choose which columns get a
-**filter** button on their tab and a **chart** on the dashboard. It lists every column in the
+**filter** button on their tab, a bar **chart** on the dashboard, and (for dropdowns) their own
+**pie** chart. It lists every column in the
 sheet with its built-in default. Choices are matched by column name, so turning off
 *Patient Name* turns it off on every tab. They're saved in the hidden settings tab and apply
 to everyone. Each tab shows up to 3 side charts.

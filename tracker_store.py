@@ -224,9 +224,11 @@ def date_column(tab):
 # any column's filter or chart on or off in the app (⚙ Settings → Charts & filters).
 
 RANDOM_WORDS = ("name", "link", "url", "serial", "key", "summary", "note", "comment",
-                "hash", "path", "script", "description", "title", "number", "patient", "id")
+                "hash", "path", "script", "description", "title", "number", "patient", "id",
+                "image")
 CHART_OFF_BY_DEFAULT = {"workflow type", "equipment"}
-FILTER_PREFIX, CHART_PREFIX = "filter:", "chart:"
+FILTER_PREFIX, CHART_PREFIX, PIE_PREFIX = "filter:", "chart:", "pie:"
+PIE_WORDS = ("why", "reason", "cause", "category", "categories")   # get their own pie chart
 PLATFORM = "platform"      # derived column: which system a run was on (Coder / Atlantis)
 STATUS = "status"          # derived column: a row's status, from whichever status column is filled
 
@@ -302,10 +304,18 @@ def blank_label(col):
         return "Unknown"
     return "(blank)"
 
+def wants_pie(col):
+    """Dropdowns of set categories like "Why?" or "Failure reason"."""
+    return col["kind"] == "dropdown" and bool(_words(col["name"]) & set(PIE_WORDS))
+
 def _default_on(tab, rows, col, purpose):
-    """Whether a column gets a filter/chart when no admin has said otherwise."""
+    """Whether a column gets a filter/chart/pie when no admin has said otherwise."""
+    if purpose == "pie":
+        return not col.get("derived") and col not in status_columns(tab) and wants_pie(col)
     if col.get("derived"):
         return True
+    if purpose == "chart" and wants_pie(col):
+        return False                               # it gets a pie instead of a bar chart
     if col in status_columns(tab) or col["kind"] in ("date", "number", "checkbox"):
         return False
     if purpose == "chart" and col["name"].strip().lower() in CHART_OFF_BY_DEFAULT:
@@ -323,7 +333,8 @@ def _default_on(tab, rows, col, purpose):
 
 def column_on(tab, rows, col, purpose, settings=None):
     """purpose: "filter" or "chart". An admin's choice (by column name) wins."""
-    key = (FILTER_PREFIX if purpose == "filter" else CHART_PREFIX) + col["name"].strip().lower()
+    prefix = {"filter": FILTER_PREFIX, "chart": CHART_PREFIX, "pie": PIE_PREFIX}[purpose]
+    key = prefix + col["name"].strip().lower()
     choice = (settings or {}).get(key)
     if choice in ("on", "off"):
         return choice == "on"
@@ -335,6 +346,11 @@ def filter_columns(tab, rows, settings=None):
     cols += [c for c in tab["columns"] if c not in status_columns(tab)]
     return [c for c in cols if c.get("derived") and c["pos"] == STATUS
             or column_on(tab, rows, c, "filter", settings)]
+
+def pie_columns(tab, rows, settings=None):
+    """Columns that get their own pie next to the status donut (e.g. "Why?")."""
+    return [c for c in tab["columns"] if c not in status_columns(tab)
+            and c["kind"] == "dropdown" and column_on(tab, rows, c, "pie", settings)]
 
 def chart_columns(tab, rows, settings=None, limit=3):
     """Side charts next to the status donut: status broken down by these columns."""
