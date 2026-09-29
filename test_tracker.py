@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.6"         # bump this for each release, then push a matching tag (v1.0.6)
+APP_VERSION = "1.0.7"         # bump this for each release, then push a matching tag (v1.0.7)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1647,25 +1647,17 @@ class Dashboard(QScrollArea):
         return card
 
     def _pie(self, tab, rows, st, col):
-        """A donut of set categories, e.g. "Why?" a run failed. Failed rows that
-        have no category yet show as "Not set", so it's clear what's left to fill in."""
-        counts = Counter()
-        for r in rows:
-            vals = [p.strip() for p in store.parts(col, r["values"][col["pos"]]) if p.strip()]
-            if vals:
-                counts.update(vals)
-            elif charts.classify(st[id(r)]) in ("blocked", "cancelled", "warning"):
-                counts[""] += 1
-        options = list(col["options"]) + sorted(v for v in counts if v and v not in col["options"])
+        """A donut of set categories, e.g. "Why?" a run failed. Rows where the
+        column is blank are left out."""
+        counts = Counter(p.strip() for r in rows
+                         for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
+        options = list(col["options"]) + sorted(v for v in counts if v not in col["options"])
         palette = {v: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, v in enumerate(options)}
-        slices = [(v, counts[v], palette[v]) for v in options if counts[v]]
-        if counts[""]:
-            slices.append(("Not set", counts[""], charts.PENDING))
         pie = charts.DonutChart()
-        set_n = sum(n for v, n in counts.items() if v)
-        pie.set_data(slices, (str(set_n), "with a reason" if counts[""] else "total"))
-        pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]:
-                           self.win.show_tab(t, {p: {"" if v == "Not set" else v}}))
+        total = sum(counts.values())
+        pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
+                     (str(total), "run" if total == 1 else "runs"))
+        pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self.win.show_tab(t, {p: {v}}))
         return self._titled(col["name"], pie)
 
     @staticmethod

@@ -65,8 +65,8 @@ every time it syncs:
   columns (like *System* or *Assignee*) do. *Workflow Type* and *Equipment* have filters
   but no charts. An admin can change any of this (see below).
 - **Category pies:** dropdown columns named like *Why?*, *Reason*, *Cause*, or *Category*
-  get their own donut next to the status donut, with one fixed colour per option. Failed
-  runs with no category yet show as a gray **Not set** slice. Click a slice to see those rows.
+  get their own donut next to the status donut, with one fixed colour per option. Rows where
+  the column is blank are left out. Click a slice to see those rows.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results* are green, *In Progress*
   blue, *Blocked / Error* red, *Cancelled* orange, *No results* yellow, *Not Started /
