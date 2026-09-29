@@ -235,11 +235,11 @@ class StackedBars(_Chart):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.groups = []
+        self.groups, self.blank = [], "(blank)"
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-    def set_data(self, groups):
-        self.groups = groups
+    def set_data(self, groups, blank="(blank)"):
+        self.groups, self.blank = groups, blank
         self.setFixedHeight(max(60, self.ROW * len(groups) + 8))
         self.update()
 
@@ -251,7 +251,7 @@ class StackedBars(_Chart):
             self._empty(p)
             return
         fm = QFontMetrics(_font(12))
-        label_w = min(max(fm.horizontalAdvance(g or "(blank)") for g, _ in self.groups) + 12,
+        label_w = min(max(fm.horizontalAdvance(g or self.blank) for g, _ in self.groups) + 12,
                       int(self.width() * 0.35))
         top = max(sum(n for _, n, _ in segs) for _, segs in self.groups) or 1
         bar_w = self.width() - label_w - 40
@@ -260,7 +260,7 @@ class StackedBars(_Chart):
             p.setPen(QColor(INK2))
             p.setFont(_font(12))
             p.drawText(QRectF(0, y, label_w - 8, self.ROW), Qt.AlignVCenter | Qt.AlignRight,
-                       fm.elidedText(group or "(blank)", Qt.ElideRight, label_w - 10))
+                       fm.elidedText(group or self.blank, Qt.ElideRight, label_w - 10))
             x = label_w
             total = sum(n for _, n, _ in segs)
             for status, n, color in segs:
@@ -276,7 +276,7 @@ class StackedBars(_Chart):
                 p.setBrush(c)
                 p.drawRoundedRect(rect, 2, 2)
                 self._marks.append((rect.adjusted(0, -4, 2, 4),
-                                    f"<b>{group or '(blank)'}</b> · {status or 'No status'}<br>"
+                                    f"<b>{group or self.blank}</b> · {status or 'No status'}<br>"
                                     f"{n} of {total} — click to see them", (group, status)))
                 x += w
             p.setPen(QColor(INK))

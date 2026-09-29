@@ -218,23 +218,130 @@ def status_column(tab):
 def date_column(tab):
     return next((c for c in tab["columns"] if c["kind"] == "date"), None)
 
-def group_columns(tab, rows, limit=None):
-    """Columns worth filtering and charting by: dropdowns, plus short text
-    columns that repeat (System, Assignee…), but not IDs or free-text notes."""
-    status = status_column(tab)
-    out = []
-    for c in tab["columns"]:
-        if c is status or c["kind"] in ("date", "number") or "note" in c["name"].lower():
-            continue
-        vals = [v for r in rows for v in parts(c, r["values"][c["pos"]]) if v.strip()]
-        distinct = {v for v in vals}
-        if c["kind"] == "dropdown":
-            ok = len(distinct) >= 2 or (c["options"] and not limit)
-        else:
-            ok = 2 <= len(distinct) <= 12 and len(distinct) <= 0.6 * len(vals)
-        if ok:
-            out.append(c)
-    out.sort(key=lambda c: c["kind"] != "dropdown")
+# ── what gets a filter and a chart ────────────────────────────────────────────
+# Kept strict on purpose: columns full of generated or one-off values (run names,
+# patient names, IDs, notes…) make useless filters and charts. An admin can turn
+# any column's filter or chart on or off in the app (⚙ Settings → Charts & filters).
+
+RANDOM_WORDS = ("name", "link", "url", "serial", "key", "summary", "note", "comment",
+                "hash", "path", "script", "description", "title", "number", "patient", "id")
+CHART_OFF_BY_DEFAULT = {"workflow type", "equipment"}
+FILTER_PREFIX, CHART_PREFIX = "filter:", "chart:"
+PLATFORM = "platform"      # derived column: which system a run was on (Coder / Atlantis)
+STATUS = "status"          # derived column: a row's status, from whichever status column is filled
+
+def _words(name):
+    return set(re.findall(r"[a-z]+", name.lower()))
+
+def looks_random(col):
+    return bool(_words(col["name"]) & set(RANDOM_WORDS))
+
+def is_version(col):
+    return "version" in _words(col["name"])
+
+def status_columns(tab):
+    """All status dropdowns, e.g. "Coder E2E Status" and "Atlantis Status"."""
+    cols = [c for c in tab["columns"] if c["kind"] == "dropdown" and "status" in c["name"].lower()]
+    if cols:
+        return cols
+    one = status_column(tab)
+    return [one] if one else []
+
+def platform_column(tab):
+    """End-to-end trackers have a run name column: "Coder E2E" means the run was
+    on Coder, and any other (generated) name means it was on Atlantis."""
+    return next((c for c in tab["columns"] if "run name" in c["name"].lower()), None)
+
+def row_platform(tab, row):
+    col = platform_column(tab)
+    v = row["values"][col["pos"]].strip() if col else ""
+    if not v:
+        return ""
+    return "Coder" if "coder" in v.lower() else "Atlantis"
+
+def row_status(tab, row):
+    """The row's status. With several status columns, the one for the row's
+    platform (e.g. Atlantis Status for an Atlantis run) wins, then any filled one."""
+    cols = status_columns(tab)
+    plat = row_platform(tab, row).lower()
+    if plat:
+        cols = sorted(cols, key=lambda c: plat not in c["name"].lower())
+    for c in cols:
+        v = row["values"][c["pos"]].strip()
+        if v:
+            return v
+    return ""
+
+def derived_columns(tab):
+    """Pseudo-columns the app filters and charts by, keyed by name ("status", "platform")."""
+    out = {}
+    cols = status_columns(tab)
+    if cols:
+        opts = list(dict.fromkeys(o for c in cols for o in c["options"]))
+        out[STATUS] = {"name": cols[0]["name"] if len(cols) == 1 else "Run Status",
+                       "pos": STATUS, "kind": "dropdown", "options": opts, "derived": True}
+    if platform_column(tab):
+        out[PLATFORM] = {"name": "Ran on", "pos": PLATFORM, "kind": "dropdown",
+                         "options": ["Coder", "Atlantis"], "derived": True}
+    return out
+
+def value_of(tab, row, col):
+    if col["pos"] == STATUS:
+        return row_status(tab, row)
+    if col["pos"] == PLATFORM:
+        return row_platform(tab, row)
+    return row["values"][col["pos"]]
+
+def blank_label(col):
+    name = col["name"].lower()
+    if any(w in name for w in ("assign", "owner", "tester")):
+        return "Unassigned"
+    if col["pos"] == STATUS or "status" in name:
+        return "No status"
+    if col["pos"] == PLATFORM:
+        return "Unknown"
+    return "(blank)"
+
+def _default_on(tab, rows, col, purpose):
+    """Whether a column gets a filter/chart when no admin has said otherwise."""
+    if col.get("derived"):
+        return True
+    if col in status_columns(tab) or col["kind"] in ("date", "number", "checkbox"):
+        return False
+    if purpose == "chart" and col["name"].strip().lower() in CHART_OFF_BY_DEFAULT:
+        return False
+    if is_version(col):          # only Software Version: "how many runs per software version"
+        return "software" in col["name"].lower() and (purpose == "filter" or
+                                                      platform_column(tab) is not None)
+    if looks_random(col):
+        return False
+    vals = [v.strip() for r in rows for v in parts(col, r["values"][col["pos"]]) if v.strip()]
+    distinct = set(vals)
+    if col["kind"] == "dropdown":
+        return len(distinct) >= 2 or (purpose == "filter" and bool(col["options"]))
+    return 2 <= len(distinct) <= 10 and len(vals) >= 4 and len(distinct) <= 0.5 * len(vals)
+
+def column_on(tab, rows, col, purpose, settings=None):
+    """purpose: "filter" or "chart". An admin's choice (by column name) wins."""
+    key = (FILTER_PREFIX if purpose == "filter" else CHART_PREFIX) + col["name"].strip().lower()
+    choice = (settings or {}).get(key)
+    if choice in ("on", "off"):
+        return choice == "on"
+    return _default_on(tab, rows, col, purpose)
+
+def filter_columns(tab, rows, settings=None):
+    derived = derived_columns(tab)
+    cols = [derived[k] for k in (STATUS, PLATFORM) if k in derived]
+    cols += [c for c in tab["columns"] if c not in status_columns(tab)]
+    return [c for c in cols if c.get("derived") and c["pos"] == STATUS
+            or column_on(tab, rows, c, "filter", settings)]
+
+def chart_columns(tab, rows, settings=None, limit=3):
+    """Side charts next to the status donut: status broken down by these columns."""
+    derived = derived_columns(tab)
+    cols = ([derived[PLATFORM]] if PLATFORM in derived else []) + \
+        [c for c in tab["columns"] if c not in status_columns(tab)]
+    out = [c for c in cols if column_on(tab, rows, c, "chart", settings)]
     return out[:limit] if limit else out
 
 def readonly_tab(tab):

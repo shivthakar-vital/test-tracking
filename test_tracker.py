@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.4"         # bump this for each release, then push a matching tag (v1.0.4)
+APP_VERSION = "1.0.5"         # bump this for each release, then push a matching tag (v1.0.5)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -163,12 +163,18 @@ def _visible_rows(tab):
     return [r for r in tab["rows"] if not store.is_blank(r)]
 
 def _colors_for(tab, rows=None):
-    col = store.status_column(tab)
+    """(the row-status pseudo-column, {status value: color}) — covers every status
+    column, e.g. both "Coder E2E Status" and "Atlantis Status"."""
+    col = store.derived_columns(tab).get(store.STATUS)
     if not col:
         return None, {}
     rows = tab["rows"] if rows is None else rows
-    values = {r["values"][col["pos"]] for r in rows}
+    values = {store.row_status(tab, r) for r in rows}
+    values |= {r["values"][c["pos"]].strip() for c in store.status_columns(tab) for r in rows}
     return col, charts.status_colors(values, col["options"])
+
+def _settings(win):
+    return (win.data or {}).get("settings") or {}
 
 
 # ── background work ───────────────────────────────────────────────────────────
@@ -249,9 +255,14 @@ class SettingsDialog(QDialog):
         colors_btn.setToolTip("Admin only: change the colour of each status, for everyone")
         colors_btn.clicked.connect(lambda: parent.open_colors(self))
         colors_btn.setEnabled(bool(parent.data) and parent.can_edit)
+        columns_btn = QPushButton("📊 Charts & filters…")
+        columns_btn.setToolTip("Admin only: choose which columns get filters and dashboard charts")
+        columns_btn.clicked.connect(lambda: parent.open_columns(self))
+        columns_btn.setEnabled(bool(parent.data) and parent.can_edit)
         admin_row = QHBoxLayout()
         admin_row.addWidget(colors_btn)
-        admin_row.addWidget(_small_label("🔒 Needs the admin passcode. Colours apply to everyone "
+        admin_row.addWidget(columns_btn)
+        admin_row.addWidget(_small_label("🔒 Needs the admin passcode. Applies to everyone "
                                          "using this release sheet.", MUTED), 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -376,10 +387,10 @@ class ColorsDialog(QDialog):
         # every status value in the sheet, with the tabs it's used in
         found, order = {}, []
         for tab in data["tabs"]:
-            col = store.status_column(tab)
+            col = store.derived_columns(tab).get(store.STATUS)
             if not col:
                 continue
-            values = list(col["options"]) + [r["values"][col["pos"]].strip() for r in _visible_rows(tab)]
+            values = list(col["options"]) + [store.row_status(tab, r) for r in _visible_rows(tab)]
             for v in charts.status_order(dict.fromkeys(values), col["options"]):
                 key = v.strip().lower()
                 if key not in found:
@@ -497,6 +508,108 @@ class ColorsDialog(QDialog):
             self.changed_passcode = dlg.passcode()
 
 
+class ColumnsDialog(QDialog):
+    """Admin: which columns get a filter button and a dashboard chart."""
+
+    def __init__(self, win, data, settings):
+        super().__init__(win)
+        self.setWindowTitle("Charts & filters")
+        self.setMinimumWidth(640)
+        self.settings = dict(settings)
+
+        # every column in the sheet (by name), with its tabs and built-in defaults
+        found, order = {}, []
+        for tab in data["tabs"]:
+            rows = _visible_rows(tab)
+            derived = store.derived_columns(tab)
+            cols = ([derived[store.PLATFORM]] if store.PLATFORM in derived else []) + \
+                [c for c in tab["columns"] if c not in store.status_columns(tab)]
+            for c in cols:
+                key = c["name"].strip().lower()
+                info = found.setdefault(key, {"name": c["name"].strip(), "tabs": [],
+                                              "filter": False, "chart": False})
+                if key not in order:
+                    order.append(key)
+                info["tabs"].append(tab["title"])
+                for purpose in ("filter", "chart"):
+                    info[purpose] |= store._default_on(tab, rows, c, purpose)
+        self.found, self.order = found, order
+
+        intro = QLabel("Choose which columns get a <b>filter</b> button on their tab and a "
+                       "<b>chart</b> next to the status donut on the dashboard. Turn these off "
+                       "for columns full of generated or one-off values, like run names or "
+                       "patient names. Applies to everyone using this release sheet.")
+        intro.setWordWrap(True)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(4)
+        for i, text in enumerate(("Column", "Filter", "Chart", "Used in")):
+            grid.addWidget(_small_label(text.upper(), "#888885", 10), 0, i)
+        self.boxes = {}
+        for i, key in enumerate(order, start=1):
+            info = found[key]
+            grid.addWidget(QLabel(info["name"]), i, 0)
+            for j, purpose in enumerate(("filter", "chart"), start=1):
+                box = QCheckBox()
+                choice = self.settings.get(self._key(purpose, key))
+                box.setChecked(choice == "on" if choice in ("on", "off") else info[purpose])
+                box.setToolTip("Built-in default: " + ("on" if info[purpose] else "off"))
+                grid.addWidget(box, i, j, Qt.AlignCenter)
+                self.boxes[(purpose, key)] = box
+            where = _small_label(", ".join(dict.fromkeys(info["tabs"])), MUTED)
+            where.setToolTip(where.text())
+            grid.addWidget(where, i, 3)
+        grid.setColumnStretch(3, 1)
+        inner = QWidget()
+        inner.setLayout(grid)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(inner)
+        scroll.setMinimumHeight(min(30 * len(order) + 40, 360))
+        self.resize(720, min(30 * len(order) + 330, 760))
+
+        note = _small_label("Status columns always have a filter and the donut. Each tab shows "
+                            "up to 3 side charts, in column order. Charts only appear once a "
+                            "column has at least two different values.", MUTED)
+        note.setWordWrap(True)
+        reset = QPushButton("Reset all to built-in defaults")
+        reset.clicked.connect(self._reset)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        save = buttons.addButton("Save for everyone", QDialogButtonBox.AcceptRole)
+        save.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        bottom = QHBoxLayout()
+        bottom.addWidget(reset)
+        bottom.addStretch(1)
+        bottom.addWidget(buttons)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
+        root.addWidget(intro)
+        root.addWidget(scroll)
+        root.addWidget(note)
+        root.addLayout(bottom)
+
+    @staticmethod
+    def _key(purpose, key):
+        return (store.FILTER_PREFIX if purpose == "filter" else store.CHART_PREFIX) + key
+
+    def _reset(self):
+        for (purpose, key), box in self.boxes.items():
+            box.setChecked(self.found[key][purpose])
+
+    def result_settings(self):
+        """Only choices that differ from the built-in default are stored."""
+        out = {k: v for k, v in self.settings.items()
+               if not k.startswith((store.FILTER_PREFIX, store.CHART_PREFIX))}
+        for (purpose, key), box in self.boxes.items():
+            if box.isChecked() != self.found[key][purpose]:
+                out[self._key(purpose, key)] = "on" if box.isChecked() else "off"
+        return out
+
+
 # ── table model, sorting and filtering ────────────────────────────────────────
 
 SORT_ROLE = Qt.UserRole + 1
@@ -509,11 +622,14 @@ class TabModel(QAbstractTableModel):
         self.page = page
         self.tab = {"columns": [], "rows": []}
         self.colors, self.status = {}, None
+        self.status_cols, self.derived = [], {}
 
     def set_tab(self, tab):
         self.beginResetModel()
         self.tab = tab
         self.status, self.colors = _colors_for(tab)
+        self.status_cols = store.status_columns(tab)
+        self.derived = store.derived_columns(tab)
         self.multi = {c["pos"] for c in tab["columns"] if store.is_multi(c, tab["rows"])}
         self.endResetModel()
 
@@ -537,6 +653,10 @@ class TabModel(QAbstractTableModel):
 
     def row(self, r):
         return self.tab["rows"][r]
+
+    def column(self, key):
+        """A real column by position, or a derived one ("status", "platform") by name."""
+        return self.derived[key] if isinstance(key, str) else self.tab["columns"][key]
 
     def editable(self, index):
         row, c = self.row(index.row()), index.column()
@@ -574,7 +694,7 @@ class TabModel(QAbstractTableModel):
             f = QFont()
             f.setUnderline(True)
             return f
-        if role == Qt.DecorationRole and self.status is col and value:
+        if role == Qt.DecorationRole and col in self.status_cols and value:
             return _dot(self.colors.get(value, charts.PENDING))
         if role == SORT_ROLE:
             if not value.strip():
@@ -582,7 +702,7 @@ class TabModel(QAbstractTableModel):
             if col["kind"] == "date":
                 d = store.parse_date(value)
                 return (0, [(0, d.toordinal(), "")] if d else _natural(value))
-            if self.status is col:
+            if col in self.status_cols:
                 return (0, [(0, charts.CLASS_ORDER.index(charts.classify(value)), ""), *_natural(value)])
             return (0, _natural(value))
         return None
@@ -629,9 +749,9 @@ class FilterProxy(QSortFilterProxyModel):
         row = m.row(r)
         if not self.show_empty and store.is_blank(row):
             return False
-        for pos, allowed in self.filters.items():
-            col = m.tab["columns"][pos]
-            if not any(p.strip() in allowed for p in store.parts(col, row["values"][pos])):
+        for key, allowed in self.filters.items():
+            col = m.column(key)
+            if not any(p.strip() in allowed for p in store.parts(col, store.value_of(m.tab, row, col))):
                 return False
         if self.words:
             hay = " ".join(row["values"]).lower()
@@ -649,7 +769,7 @@ class FilterProxy(QSortFilterProxyModel):
 
 class FilterButton(QToolButton):
     """ "Status ▾" — a popup checklist of the column's values. All checked = no filter."""
-    changed = pyqtSignal(int, object)
+    changed = pyqtSignal(object, object)       # (column pos or derived name, values)
 
     def __init__(self, col):
         super().__init__()
@@ -683,7 +803,7 @@ class FilterButton(QToolButton):
         self.list.blockSignals(True)
         self.list.clear()
         for v in values:
-            item = QListWidgetItem(f"{v or BLANK}   ({counts.get(v, 0)})")
+            item = QListWidgetItem(f"{v or store.blank_label(self.col)}   ({counts.get(v, 0)})")
             item.setData(Qt.UserRole, v)
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             checked = was is None or v in was or v not in known
@@ -724,7 +844,7 @@ class FilterButton(QToolButton):
         if sel is None:
             text = f"{name}  ▾"
         elif len(sel) == 1:
-            text = f"{name}: {next(iter(sel)) or BLANK}  ▾"
+            text = f"{name}: {next(iter(sel)) or store.blank_label(self.col)}  ▾"
         else:
             text = f"{name}: {len(sel)} of {self.list.count()}  ▾"
         self.setText(text)
@@ -1087,14 +1207,15 @@ class TabPage(QWidget):
         widths = {c["name"]: self.view.columnWidth(c["pos"]) for c in old_cols}
         sort_col, sort_order = self.proxy.sortColumn(), self.proxy.sortOrder()
         if any(old != new for old, new in moved.items()):
-            self.proxy.filters = {moved[p]: v for p, v in self.proxy.filters.items()
-                                  if moved.get(p) is not None}
+            follow = lambda p: p if isinstance(p, str) else moved.get(p)   # derived keys stay
+            self.proxy.filters = {follow(p): v for p, v in self.proxy.filters.items()
+                                  if follow(p) is not None}
             btns = {}
             for p, btn in self.filter_btns.items():
-                if moved.get(p) is None:
+                if follow(p) is None:
                     btn.deleteLater()
                 else:
-                    btns[moved[p]] = btn
+                    btns[follow(p)] = btn
             self.filter_btns = btns
             if keep:
                 keep = (keep[0], moved.get(keep[1]))
@@ -1142,8 +1263,7 @@ class TabPage(QWidget):
 
     def _build_filters(self, tab):
         rows = _visible_rows(tab)
-        status = store.status_column(tab)
-        cols = ([status] if status else []) + store.group_columns(tab, rows)
+        cols = store.filter_columns(tab, rows, _settings(self.win))
         wanted = {c["pos"] for c in cols}
         for pos in list(self.filter_btns):
             if pos not in wanted:
@@ -1151,10 +1271,12 @@ class TabPage(QWidget):
                 self.proxy.set_filter(pos, None)
                 btn.deleteLater()
         for c in cols:
-            counts = Counter(p.strip() for r in rows for p in store.parts(c, r["values"][c["pos"]]))
+            counts = Counter(p.strip() for r in rows for p in store.parts(c, store.value_of(tab, r, c)))
             values = list(c["options"]) + sorted(v for v in counts if v not in c["options"])
-            if c is status:
+            if c["pos"] == store.STATUS:
                 values = charts.status_order(values, c["options"])
+            elif store.is_version(c):
+                values = sorted(values, key=_natural, reverse=True)       # newest first
             if "" in counts and "" not in values:
                 values.append("")
             btn = self.filter_btns.get(c["pos"])
@@ -1222,7 +1344,8 @@ class TabPage(QWidget):
         total = len([r for r in self.model.tab["rows"] if self.proxy.show_empty or not store.is_blank(r)])
         shown = self.proxy.rowCount()
         self.count_lbl.setText(f"Showing {shown} of {total}" if shown != total else f"{total} rows")
-        extra = [self.model.tab["columns"][p]["name"] + ": " + ", ".join(sorted(v or BLANK for v in vals))
+        extra = [self.model.column(p)["name"] + ": " +
+                 ", ".join(sorted(v or store.blank_label(self.model.column(p)) for v in vals))
                  for p, vals in self.proxy.filters.items() if p not in self.filter_btns]
         self.extra_lbl.setText("Filtered by " + "; ".join(extra) if extra else "")
         self.clear_btn.setVisible(bool(self.proxy.filters or self.proxy.words))
@@ -1315,7 +1438,7 @@ class TabPage(QWidget):
         if col["pos"] in self.filter_btns or col["kind"] in ("dropdown", "date") or value:
             menu.addSeparator()
             show = set(store.parts(col, value)) if value else {""}
-            menu.addAction(f"Show only “{value or BLANK}” in {col['name']}",
+            menu.addAction(f"Show only “{value or store.blank_label(col)}” in {col['name']}",
                            lambda: self.show_only({col["pos"]: show}))
         menu.exec_(self.view.viewport().mapToGlobal(pos))
 
@@ -1393,7 +1516,7 @@ class Dashboard(QScrollArea):
         lay.addWidget(_small_label(tab["title"], "#666663", 11))
         mini = charts.MiniBar()
         if status and rows:
-            counts = Counter(r["values"][status["pos"]].strip() for r in rows)
+            counts = Counter(store.row_status(tab, r) for r in rows)
             cls = Counter()
             for v, n in counts.items():
                 cls[charts.classify(v)] += n
@@ -1402,7 +1525,7 @@ class Dashboard(QScrollArea):
             big.setStyleSheet("font-size:24px; font-weight:bold;")
             bits = [f"{done} of {total} done"]
             if cls["blocked"]:
-                bits.append(f"{cls['blocked']} blocked")
+                bits.append(f"{cls['blocked']} " + ("failed" if store.platform_column(tab) else "blocked"))
             if cls["active"]:
                 bits.append(f"{cls['active']} in progress")
             sub = _small_label(" · ".join(bits), "#52514E", 11)
@@ -1446,8 +1569,9 @@ class Dashboard(QScrollArea):
                                        "Add a dropdown column named “Status” to get charts.", MUTED))
             return card
 
-        pos = status["pos"]
-        counts = Counter(r["values"][pos].strip() for r in rows)
+        pos = status["pos"]                       # the derived "status" key
+        st = {id(r): store.row_status(tab, r) for r in rows}
+        counts = Counter(st.values())
         order = charts.status_order(list(counts), status["options"])
         done = sum(n for v, n in counts.items() if charts.classify(v) == "done")
 
@@ -1459,20 +1583,30 @@ class Dashboard(QScrollArea):
         donut.picked.connect(lambda v, t=tab["title"]: self.win.show_tab(t, {pos: {v}}))
         charts_row.addWidget(self._titled(status["name"], donut), 0, Qt.AlignTop)
 
-        for g in store.group_columns(tab, rows, limit=3):
+        for g in store.chart_columns(tab, rows, _settings(self.win), limit=3):
             groups = defaultdict(Counter)
             for r in rows:
-                for part in store.parts(g, r["values"][g["pos"]]):
-                    groups[part.strip()][r["values"][pos].strip()] += 1
+                for part in store.parts(g, store.value_of(tab, r, g)):
+                    groups[part.strip()][st[id(r)]] += 1
             if len(groups) < 2 and "" in groups:
                 continue                       # nobody has filled this column in yet
-            names = sorted(groups, key=lambda k: (k == "", -sum(groups[k].values()), k))[:12]
+            if store.is_version(g):            # newest version first
+                names = (sorted((k for k in groups if k), key=_natural, reverse=True)
+                         + ([""] if "" in groups else []))[:12]
+            else:
+                names = sorted(groups, key=lambda k: (k == "", -sum(groups[k].values()), k))[:12]
             bars = charts.StackedBars()
             bars.set_data([(n, [(v, groups[n][v], colors.get(v, charts.PENDING)) for v in order])
-                           for n in names])
+                           for n in names], blank=store.blank_label(g))
             bars.picked.connect(lambda gv, t=tab["title"], gp=g["pos"]:
                                 self.win.show_tab(t, {gp: {gv[0]}, pos: {gv[1]}}))
-            charts_row.addWidget(self._titled(f"{status['name']} by {g['name']}", bars), 1, Qt.AlignTop)
+            if g["pos"] == store.PLATFORM:
+                title = "Runs on Coder vs Atlantis"
+            elif store.is_version(g) and store.platform_column(tab):
+                title = f"Runs per {g['name']}"
+            else:
+                title = f"{status['name']} by {g['name']}"
+            charts_row.addWidget(self._titled(title, bars), 1, Qt.AlignTop)
         charts_row.addStretch(0)
         lay.addLayout(charts_row)
 
@@ -1483,7 +1617,7 @@ class Dashboard(QScrollArea):
             for r in rows:
                 d = store.parse_date(r["values"][dcol["pos"]])
                 if d:
-                    days[d][r["values"][pos].strip()] += 1
+                    days[d][st[id(r)]] += 1
                     raw[d].add(r["values"][dcol["pos"]])
             if days:
                 col_chart = charts.DayColumns()
@@ -1868,32 +2002,40 @@ class TrackerApp(QMainWindow):
 
     # ── admin: chart colours ──────────────────────────────────────────────────
 
-    def open_colors(self, parent=None):
-        parent = parent or self
+    def _admin_unlock(self, parent, what):
+        """Ask for the admin passcode (or set one the first time). Returns
+        (settings, passcode hash before) or None if cancelled / wrong."""
         if not (self.data and self.can_edit and self.source):
             QMessageBox.information(parent, "Not connected",
                                     "Connect to the Google Sheet first, then try again.")
-            return
+            return None
         settings = dict(self.data.get("settings") or {})
         stored = settings.get(store.PASSCODE_KEY)
         if not stored:
             dlg = NewPasscodeDialog(parent)
             if dlg.exec_() != QDialog.Accepted:
-                return
+                return None
             settings[store.PASSCODE_KEY] = store.hash_passcode(dlg.passcode())
             self.admin_unlocked = self.url
         elif getattr(self, "admin_unlocked", None) != self.url:
             code, ok = QInputDialog.getText(parent, "Admin passcode",
-                                            "Enter the admin passcode to change chart colours:",
+                                            f"Enter the admin passcode to change {what}:",
                                             QLineEdit.Password)
             if not ok:
-                return
+                return None
             if not store.check_passcode(code, stored):
                 QMessageBox.warning(parent, "Wrong passcode",
                                     "That passcode isn't right.\n\nForgot it? See “Admin "
                                     "passcode” in the README for how to reset it.")
-                return
+                return None
             self.admin_unlocked = self.url          # don't ask again until the app restarts
+        return settings, stored
+
+    def open_colors(self, parent=None):
+        unlocked = self._admin_unlock(parent or self, "chart colours")
+        if not unlocked:
+            return
+        settings, stored = unlocked
         dlg = ColorsDialog(self, self.data, store.color_overrides(settings))
         if dlg.exec_() != QDialog.Accepted:
             if settings.get(store.PASSCODE_KEY) != stored:
@@ -1904,6 +2046,18 @@ class TrackerApp(QMainWindow):
         if dlg.changed_passcode:
             settings[store.PASSCODE_KEY] = store.hash_passcode(dlg.changed_passcode)
         self._save_settings(settings, "Chart colours saved for everyone.")
+
+    def open_columns(self, parent=None):
+        unlocked = self._admin_unlock(parent or self, "charts and filters")
+        if not unlocked:
+            return
+        settings, stored = unlocked
+        dlg = ColumnsDialog(self, self.data, settings)
+        if dlg.exec_() != QDialog.Accepted:
+            if settings.get(store.PASSCODE_KEY) != stored:
+                self._save_settings(settings, "Admin passcode set.")
+            return
+        self._save_settings(dlg.result_settings(), "Charts & filters saved for everyone.")
 
     def _save_settings(self, settings, msg):
         src = self.source

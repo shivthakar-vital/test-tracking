@@ -53,8 +53,18 @@ every time it syncs:
   pickers. On plain tabs, the first row is the header, and dropdowns come from data
   validation.
 - The **status column** is the dropdown whose name contains "Status" (e.g. *Current
-  Status*, *Atlantis Status*). Charts are grouped by the other dropdowns and by short text
-  columns that repeat, like *System* or *Assignee*.
+  Status*). If a tab has several (*Coder E2E Status* and *Atlantis Status*), each row's
+  status comes from the one that's filled in, preferring the one for the system the run
+  was on.
+- **End-to-end trackers** (tabs with a *Run Name* column) get a **Ran on** filter and a
+  **Coder vs Atlantis** chart. A run named *Coder E2E* ran on Coder; any other name means
+  Atlantis. They also get a **Runs per Software Version** chart, newest version first.
+- **Filters and charts are strict by default.** Columns of generated or one-off values
+  (names, links, IDs, serial numbers, notes, scripts, and version hashes other than
+  *Software Version*) get no filter or chart. Other dropdowns and short, repeating text
+  columns (like *System* or *Assignee*) do. *Workflow Type* and *Equipment* have filters
+  but no charts. An admin can change any of this (see below).
+- Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results* are green, *In Progress*
   blue, *Blocked / Error* red, *Cancelled* orange, *No results* yellow, *Not Started /
   Created* gray, and *Deferred* dark gray.
@@ -68,6 +78,14 @@ every time it syncs:
    dropdown and paste the link. You can switch between releases from that dropdown.
 2. **New tab in the same file**: duplicate a tab and rename it. It shows up by itself on the
    next sync.
+
+## Admin: charts & filters
+
+Click **⚙ Settings → 📊 Charts & filters…** (admin passcode) to choose which columns get a
+**filter** button on their tab and a **chart** on the dashboard. It lists every column in the
+sheet with its built-in default. Choices are matched by column name, so turning off
+*Patient Name* turns it off on every tab. They're saved in the hidden settings tab and apply
+to everyone. Each tab shows up to 3 side charts.
 
 ## Admin: chart colours
 
