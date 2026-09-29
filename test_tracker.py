@@ -16,7 +16,7 @@ Build a double-clickable app:
 
 import re, subprocess, sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.8"         # bump this for each release, then push a matching tag (v1.0.8)
+APP_VERSION = "1.0.9"         # bump this for each release, then push a matching tag (v1.0.9)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1462,6 +1462,100 @@ class TabPage(QWidget):
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
 
+class DateBar(QFrame):
+    """Dates ▾ [preset] [from] – [to] — narrows the dashboard to runs in that range."""
+    PRESETS = ["All dates", "Today", "Yesterday", "Last 7 days", "Last 30 days", "This month",
+               "On a date…", "Date range…"]
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        saved = win.cfg.get("dash_dates") or {}
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 10, 8, 0)
+        lay.setSpacing(8)
+        lay.addWidget(_small_label("Dates"))
+        self.preset = QComboBox()
+        self.preset.addItems(self.PRESETS)
+        self.preset.setMinimumWidth(150)
+        self.start, self.end = QDateEdit(), QDateEdit()
+        for ed, key in ((self.start, "from"), (self.end, "to")):
+            ed.setCalendarPopup(True)
+            ed.setDisplayFormat("MMM d, yyyy")
+            ed.setMinimumWidth(130)
+            d = store.parse_date(saved.get(key, ""))
+            ed.setDate(QDate(d.year, d.month, d.day) if d else QDate.currentDate())
+            ed.dateChanged.connect(self._changed)
+        self.dash_lbl = QLabel("–")
+        self.note = _small_label("", MUTED)
+        lay.addWidget(self.preset)
+        lay.addWidget(self.start)
+        lay.addWidget(self.dash_lbl)
+        lay.addWidget(self.end)
+        lay.addSpacing(6)
+        lay.addWidget(self.note, 1)
+        i = self.preset.findText(saved.get("preset", "All dates"))
+        self.preset.setCurrentIndex(max(i, 0))
+        self.preset.currentIndexChanged.connect(self._changed)
+        self._apply(save=False)
+
+    def _changed(self, *_):
+        self._apply(save=True)
+        if self.win.data:
+            self.win.dashboard.set_data(self.win.data)
+
+    def current_range(self):
+        """(first day, last day), or None for all dates. Presets are relative to today."""
+        today, name = date.today(), self.preset.currentText()
+        qd = lambda ed: date(ed.date().year(), ed.date().month(), ed.date().day())
+        if name == "Today":
+            return today, today
+        if name == "Yesterday":
+            return today - timedelta(days=1), today - timedelta(days=1)
+        if name == "Last 7 days":
+            return today - timedelta(days=6), today
+        if name == "Last 30 days":
+            return today - timedelta(days=29), today
+        if name == "This month":
+            return today.replace(day=1), today
+        if name == "On a date…":
+            return qd(self.start), qd(self.start)
+        if name == "Date range…":
+            a, b = qd(self.start), qd(self.end)
+            return (a, b) if a <= b else (b, a)
+        return None
+
+    def _apply(self, save):
+        name = self.preset.currentText()
+        self.start.setVisible(name in ("On a date…", "Date range…"))
+        self.dash_lbl.setVisible(name == "Date range…")
+        self.end.setVisible(name == "Date range…")
+        rng = self.current_range()
+        dash = self.win.dashboard
+        dash.range = rng
+        if rng is None:
+            dash.range_text = "All dates"
+        elif rng[0] == rng[1]:
+            dash.range_text = f"{rng[0]:%a %b} {rng[0].day}"
+        else:
+            dash.range_text = f"{rng[0]:%b} {rng[0].day} – {rng[1]:%b} {rng[1].day}"
+        dated = [t["title"] for t in (self.win.data or {}).get("tabs", []) if store.date_column(t)]
+        if rng is None:
+            self.note.setText("")
+        else:
+            self.note.setText(f"Showing {dash.range_text} on " + (", ".join(dated) or "tabs with a date column")
+                              + ". Tabs without a date column show everything.")
+        if save:
+            self.win.cfg["dash_dates"] = {"preset": name,
+                                          "from": self.start.date().toString("M/d/yyyy"),
+                                          "to": self.end.date().toString("M/d/yyyy")}
+            store.save_config(self.win.cfg)
+
+    def refresh(self):
+        """Presets like "Today" follow the clock; update the text after each sync."""
+        self._apply(save=False)
+
+
 class Dashboard(QScrollArea):
     def __init__(self, win):
         super().__init__()
@@ -1469,6 +1563,43 @@ class Dashboard(QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.NoFrame)
         self.body = None
+        self.range, self.range_text = None, "All dates"     # set by the DateBar
+
+    # ── date range ────────────────────────────────────────────────────────────
+
+    def _dated(self, tab):
+        """True when the date filter applies to this tab (it has a date column)."""
+        return self.range is not None and store.date_column(tab) is not None
+
+    def _rows(self, tab):
+        rows = _visible_rows(tab)
+        if not self._dated(tab):
+            return rows
+        dcol, (start, end) = store.date_column(tab), self.range
+        keep = []
+        for r in rows:
+            d = store.parse_date(r["values"][dcol["pos"]])
+            if d and start <= d <= end:
+                keep.append(r)
+        return keep
+
+    def _count_note(self, tab, rows):
+        n = len(rows)
+        text = f"{n} row{'s' if n != 1 else ''}"
+        if self._dated(tab):
+            total = len(_visible_rows(tab))
+            text = f"{n} of {total} rows · {self.range_text}"
+        return text
+
+    def _go(self, title, filters=None):
+        """Open a tab's table, filtered like the chart that was clicked — including the dates."""
+        filters = dict(filters or {})
+        tab = next((t for t in self.win.data["tabs"] if t["title"] == title), None)
+        if tab and self._dated(tab):
+            dcol = store.date_column(tab)
+            if dcol["pos"] not in filters:
+                filters[dcol["pos"]] = {r["values"][dcol["pos"]] for r in self._rows(tab)} or {"\0"}
+        self.win.show_tab(title, filters or None)
 
     def set_data(self, data):
         pos = self.verticalScrollBar().value()
@@ -1511,13 +1642,13 @@ class Dashboard(QScrollArea):
         QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(pos))
 
     def _tile(self, tab):
-        rows = _visible_rows(tab)
+        rows = self._rows(tab)
         status, colors = _colors_for(tab, rows)
         tile = QFrame()
         tile.setObjectName("tile")
         tile.setCursor(Qt.PointingHandCursor)
         tile.setToolTip(f"Open {tab['title']}")
-        tile.mousePressEvent = lambda e, t=tab["title"]: self.win.show_tab(t)
+        tile.mousePressEvent = lambda e, t=tab["title"]: self._go(t)
         lay = QVBoxLayout(tile)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(4)
@@ -1536,20 +1667,23 @@ class Dashboard(QScrollArea):
                 bits.append(f"{cls['blocked']} " + ("failed" if store.platform_column(tab) else "blocked"))
             if cls["active"]:
                 bits.append(f"{cls['active']} in progress")
+            if self._dated(tab):
+                bits.append(self.range_text)
             sub = _small_label(" · ".join(bits), "#52514E", 11)
             order = charts.status_order(list(counts), status["options"])
             mini.set_data([(v or "No status", counts[v], colors.get(v, charts.PENDING)) for v in order])
         else:
             big = QLabel(str(len(rows)))
             big.setStyleSheet("font-size:24px; font-weight:bold;")
-            sub = _small_label("rows", "#52514E", 11)
+            sub = _small_label("rows" + (f" · {self.range_text}" if self._dated(tab) else ""),
+                               "#52514E", 11)
         lay.addWidget(big)
         lay.addWidget(sub)
         lay.addWidget(mini)
         return tile
 
     def _section(self, tab):
-        rows = _visible_rows(tab)
+        rows = self._rows(tab)
         status, colors = _colors_for(tab, rows)
         card = QFrame()
         card.setObjectName("card")
@@ -1560,17 +1694,18 @@ class Dashboard(QScrollArea):
         t = QLabel(tab["title"])
         t.setStyleSheet("font-size:15px; font-weight:bold;")
         head.addWidget(t)
-        detail = f"{len(rows)} row{'s' if len(rows) != 1 else ''}" + (f" · by {status['name']}" if status else "")
+        detail = self._count_note(tab, rows) + (f" · by {status['name']}" if status else "")
         head.addWidget(_small_label(detail, MUTED), 0, Qt.AlignBottom)
         head.addStretch(1)
         open_btn = QPushButton("Open table →")
         open_btn.setObjectName("link")
-        open_btn.clicked.connect(lambda: self.win.show_tab(tab["title"]))
+        open_btn.clicked.connect(lambda: self._go(tab["title"]))
         head.addWidget(open_btn)
         lay.addLayout(head)
 
         if not rows:
-            lay.addWidget(_small_label("Nothing filled in yet.", MUTED))
+            lay.addWidget(_small_label("No rows in the chosen dates." if self._dated(tab)
+                                       else "Nothing filled in yet.", MUTED))
             return card
         if not status:
             lay.addWidget(_small_label("No status column found, so there's nothing to chart. "
@@ -1588,7 +1723,7 @@ class Dashboard(QScrollArea):
         donut = charts.DonutChart()
         donut.set_data([(v, counts[v], colors.get(v, charts.PENDING)) for v in order],
                        (f"{round(100 * done / len(rows))}%", "done"))
-        donut.picked.connect(lambda v, t=tab["title"]: self.win.show_tab(t, {pos: {v}}))
+        donut.picked.connect(lambda v, t=tab["title"]: self._go(t, {pos: {v}}))
         charts_row.addWidget(self._titled(status["name"], donut), 0, Qt.AlignTop)
 
         pies = store.pie_columns(tab, rows, _settings(self.win))
@@ -1617,7 +1752,7 @@ class Dashboard(QScrollArea):
             bars.set_data([(n, [(v, groups[n][v], colors.get(v, charts.PENDING)) for v in order])
                            for n in names], blank=store.blank_label(g))
             bars.picked.connect(lambda gv, t=tab["title"], gp=g["pos"]:
-                                self.win.show_tab(t, {gp: {gv[0]}, pos: {gv[1]}}))
+                                self._go(t, {gp: {gv[0]}, pos: {gv[1]}}))
             if g["pos"] == store.PLATFORM:
                 title = "Runs on Coder vs Atlantis"
             elif store.is_version(g) and store.platform_column(tab):
@@ -1644,7 +1779,7 @@ class Dashboard(QScrollArea):
                 col_chart.set_data([(d, [(v, days[d][v], colors.get(v, charts.PENDING)) for v in order])
                                     for d in sorted(days)])
                 col_chart.picked.connect(lambda ds, t=tab["title"], dp=dcol["pos"]:
-                                         self.win.show_tab(t, {dp: raw[ds[0]], pos: {ds[1]}}))
+                                         self._go(t, {dp: raw[ds[0]], pos: {ds[1]}}))
                 lay.addWidget(self._titled(f"Per day ({dcol['name']})", col_chart))
         return card
 
@@ -1664,13 +1799,13 @@ class Dashboard(QScrollArea):
         total = sum(counts.values())
         pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
                      (str(total), "run" if total == 1 else "runs"))
-        pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self.win.show_tab(t, {p: {v}}))
+        pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self._go(t, {p: {v}}))
         return self._titled(col["name"], pie)
 
     def _analysis(self, tab):
         """Error Analysis card: why runs failed, which subsystem, and a tally of
         every component (from the dropdown's options) grouped by subsystem."""
-        rows = _visible_rows(tab)
+        rows = self._rows(tab)
         st = {id(r): store.row_status(tab, r) for r in rows}
         fault, comp = store.fault_column(tab), store.component_column(tab)
 
@@ -1690,12 +1825,14 @@ class Dashboard(QScrollArea):
         t.setStyleSheet("font-size:15px; font-weight:bold;")
         head.addWidget(t)
         failed = sum(charts.classify(v) in ("blocked", "cancelled", "warning") for v in st.values())
-        head.addWidget(_small_label(f"{failed} failed run{'s' if failed != 1 else ''} · blanks are "
-                                    "left out", MUTED), 0, Qt.AlignBottom)
+        note = f"{failed} failed run{'s' if failed != 1 else ''}"
+        if self._dated(tab):
+            note += " · " + self.range_text
+        head.addWidget(_small_label(note + " · blanks are left out", MUTED), 0, Qt.AlignBottom)
         head.addStretch(1)
         open_btn = QPushButton("Open table →")
         open_btn.setObjectName("link")
-        open_btn.clicked.connect(lambda: self.win.show_tab(tab["title"]))
+        open_btn.clicked.connect(lambda: self._go(tab["title"]))
         head.addWidget(open_btn)
         lay.addLayout(head)
 
@@ -1717,7 +1854,7 @@ class Dashboard(QScrollArea):
                 groups.setdefault(sub, []).append((part or value, counts[value], value))
             tally = charts.ComponentTally()
             tally.set_data([(sub, sub_colors.get(sub, charts.PENDING), parts) for sub, parts in groups.items()])
-            tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self.win.show_tab(t, {p: {v}}))
+            tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self._go(t, {p: {v}}))
             lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
         return card
 
@@ -1800,7 +1937,14 @@ class TrackerApp(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.dashboard = Dashboard(self)
-        self.tabs.addTab(self.dashboard, "📊 Dashboard")
+        self.date_bar = DateBar(self)
+        dash_page = QWidget()
+        dash_lay = QVBoxLayout(dash_page)
+        dash_lay.setContentsMargins(0, 0, 0, 0)
+        dash_lay.setSpacing(0)
+        dash_lay.addWidget(self.date_bar)
+        dash_lay.addWidget(self.dashboard, 1)
+        self.tabs.addTab(dash_page, "📊 Dashboard")
         self.empty = QLabel("Add your test-tracking Google Sheet in ⚙ Settings to get started.")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setStyleSheet(f"color:{MUTED}; font-size:14px;")
@@ -2022,6 +2166,7 @@ class TrackerApp(QMainWindow):
                     self.tabs.insertTab(i + 1, page, tab["title"])
             if store.readonly_tab(tab):
                 self.tabs.setTabToolTip(i + 1, "Filled in automatically; read-only here")
+        self.date_bar.refresh()
         self.dashboard.set_data(data)
 
     # ── writing ───────────────────────────────────────────────────────────────

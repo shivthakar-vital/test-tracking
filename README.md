@@ -17,6 +17,10 @@ are written straight back to the sheet.
     *Workflow Type*
   - **runs per day**, for tabs with a date column
   - Hover over any chart for details. **Click a slice or bar** to jump to exactly those rows
+- **Date filter** at the top of the dashboard: *Today*, *Yesterday*, *Last 7 / 30 days*,
+  *This month*, *On a date…*, or a *Date range…*. It narrows every chart and card for tabs that
+  have a date column (e.g. the end-to-end run trackers); other tabs show everything. Clicking
+  a chart opens the table with the same dates applied. Your choice is remembered.
 - **One tab per sheet tab**, with:
   - **Search** across every column
   - **Filters** for dropdown and grouping columns (*Status ▾*, *Equipment ▾*…). Tick the values
