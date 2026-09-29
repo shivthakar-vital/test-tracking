@@ -38,7 +38,7 @@ import charts
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.7"         # bump this for each release, then push a matching tag (v1.0.7)
+APP_VERSION = "1.0.8"         # bump this for each release, then push a matching tag (v1.0.8)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1503,6 +1503,8 @@ class Dashboard(QScrollArea):
 
         for tab in tabs:
             root.addWidget(self._section(tab))
+            if _visible_rows(tab) and (store.fault_column(tab) or store.component_column(tab)):
+                root.addWidget(self._analysis(tab))
         root.addStretch(1)
         self.setWidget(body)
         self.body = body
@@ -1646,19 +1648,78 @@ class Dashboard(QScrollArea):
                 lay.addWidget(self._titled(f"Per day ({dcol['name']})", col_chart))
         return card
 
-    def _pie(self, tab, rows, st, col):
-        """A donut of set categories, e.g. "Why?" a run failed. Rows where the
+    def _pie(self, tab, rows, st, col, palette=None):
+        """A donut of categories, e.g. "Reason for Error Runs". Rows where the
         column is blank are left out."""
         counts = Counter(p.strip() for r in rows
                          for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
         options = list(col["options"]) + sorted(v for v in counts if v not in col["options"])
-        palette = {v: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, v in enumerate(options)}
+        if palette is None:
+            palette = {v: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, v in enumerate(options)}
+        else:
+            options = list(palette) + sorted(v for v in counts if v not in palette)
+            extra = iter(c for c in charts.CATEGORICAL if c not in palette.values())
+            palette = dict(palette, **{v: next(extra, charts.PENDING) for v in options if v not in palette})
         pie = charts.DonutChart()
         total = sum(counts.values())
         pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
                      (str(total), "run" if total == 1 else "runs"))
         pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self.win.show_tab(t, {p: {v}}))
         return self._titled(col["name"], pie)
+
+    def _analysis(self, tab):
+        """Error Analysis card: why runs failed, which subsystem, and a tally of
+        every component (from the dropdown's options) grouped by subsystem."""
+        rows = _visible_rows(tab)
+        st = {id(r): store.row_status(tab, r) for r in rows}
+        fault, comp = store.fault_column(tab), store.component_column(tab)
+
+        # one color per subsystem, in the component dropdown's order, shared by pie and tally
+        subsystems = list(dict.fromkeys(store.split_component(o)[0] for o in (comp or {}).get("options", [])))
+        if fault:
+            subsystems += sorted({r["values"][fault["pos"]].strip() for r in rows} - set(subsystems) - {""})
+        sub_colors = {s_: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, s_ in enumerate(subsystems)}
+
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(18, 14, 18, 16)
+        lay.setSpacing(10)
+        head = QHBoxLayout()
+        t = QLabel(f"{tab['title']} — Error Analysis")
+        t.setStyleSheet("font-size:15px; font-weight:bold;")
+        head.addWidget(t)
+        failed = sum(charts.classify(v) in ("blocked", "cancelled", "warning") for v in st.values())
+        head.addWidget(_small_label(f"{failed} failed run{'s' if failed != 1 else ''} · blanks are "
+                                    "left out", MUTED), 0, Qt.AlignBottom)
+        head.addStretch(1)
+        open_btn = QPushButton("Open table →")
+        open_btn.setObjectName("link")
+        open_btn.clicked.connect(lambda: self.win.show_tab(tab["title"]))
+        head.addWidget(open_btn)
+        lay.addLayout(head)
+
+        pies = QHBoxLayout()
+        pies.setSpacing(28)
+        for pc in store.pie_columns(tab, rows, _settings(self.win)):
+            pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
+        if fault:
+            pies.addWidget(self._pie(tab, rows, st, fault, palette=sub_colors), 0, Qt.AlignTop)
+        pies.addStretch(1)
+        lay.addLayout(pies)
+
+        if comp:
+            counts = Counter(p.strip() for r in rows
+                             for p in store.parts(comp, r["values"][comp["pos"]]) if p.strip())
+            groups = {}
+            for value in list(comp["options"]) + sorted(v for v in counts if v not in comp["options"]):
+                sub, part = store.split_component(value)
+                groups.setdefault(sub, []).append((part or value, counts[value], value))
+            tally = charts.ComponentTally()
+            tally.set_data([(sub, sub_colors.get(sub, charts.PENDING), parts) for sub, parts in groups.items()])
+            tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self.win.show_tab(t, {p: {v}}))
+            lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
+        return card
 
     @staticmethod
     def _titled(title, widget):

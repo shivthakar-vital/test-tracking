@@ -67,6 +67,13 @@ every time it syncs:
 - **Category pies:** dropdown columns named like *Why?*, *Reason*, *Cause*, or *Category*
   get their own donut next to the status donut, with one fixed colour per option. Rows where
   the column is blank are left out. Click a slice to see those rows.
+- **Error Analysis card:** a tab with a *… At Fault* column (e.g. *Subsystem At Fault*) or a
+  *… Component* dropdown whose options look like `Subsystem - Component` (e.g.
+  `HT - Precision Stepper`) gets a second card under its own. It shows the category pies
+  (e.g. *Reason for Error Runs*), a **Subsystem At Fault** pie, and a **tally of every
+  component grouped by subsystem**, including components with no runs yet. Subsystem
+  colours match between the pie and the tally, and blanks are left out. Click anything
+  to see those runs.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results* are green, *In Progress*
   blue, *Blocked / Error* red, *Cancelled* orange, *No results* yellow, *Not Started /

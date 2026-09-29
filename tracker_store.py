@@ -304,6 +304,22 @@ def blank_label(col):
         return "Unknown"
     return "(blank)"
 
+def fault_column(tab):
+    """e.g. "Subsystem At Fault": which subsystem caused a failed run."""
+    return next((c for c in tab["columns"] if "fault" in _words(c["name"])
+                 and c not in status_columns(tab)), None)
+
+def component_column(tab):
+    """e.g. "Subsystem Component": a dropdown of "Subsystem - Component" options."""
+    return next((c for c in tab["columns"] if c["kind"] == "dropdown"
+                 and "component" in _words(c["name"])
+                 and any(" - " in o for o in c["options"])), None)
+
+def split_component(value):
+    """ "HT - Precision Stepper" → ("HT", "Precision Stepper")."""
+    sub, _, part = value.partition(" - ")
+    return (sub.strip(), part.strip()) if part else (value.strip(), "")
+
 def wants_pie(col):
     """Dropdowns of set categories like "Why?" or "Failure reason"."""
     return col["kind"] == "dropdown" and bool(_words(col["name"]) & set(PIE_WORDS))
@@ -314,6 +330,8 @@ def _default_on(tab, rows, col, purpose):
         return not col.get("derived") and col not in status_columns(tab) and wants_pie(col)
     if col.get("derived"):
         return True
+    if col in (fault_column(tab), component_column(tab)):
+        return purpose == "filter"                 # charted in the Error Analysis card instead
     if purpose == "chart" and wants_pie(col):
         return False                               # it gets a pie instead of a bar chart
     if col in status_columns(tab) or col["kind"] in ("date", "number", "checkbox"):

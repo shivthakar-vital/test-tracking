@@ -378,3 +378,89 @@ class MiniBar(QWidget):
             p.setBrush(QColor(color))
             p.drawRect(QRectF(x, 0, max(w - 2, 1), self.height()))
             x += w
+
+
+class ComponentTally(_Chart):
+    """Counts per component, grouped by subsystem, including components with no
+    runs yet. groups: [(subsystem, color, [(component label, count, value), …])].
+    Laid out in columns that wrap to fit the width."""
+    ROW, HEAD, COL_W, GAP = 22, 30, 230, 16
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.groups = []
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def set_data(self, groups):
+        self.groups = groups
+        self._relayout()
+        self.update()
+
+    def resizeEvent(self, e):
+        self._relayout()
+        super().resizeEvent(e)
+
+    def _columns(self):
+        return max(1, int((self.width() + self.GAP) // (self.COL_W + self.GAP)))
+
+    def _relayout(self):
+        """Place each subsystem block in the currently shortest column."""
+        n = self._columns()
+        heights, self._placed = [0] * n, []
+        for g in self.groups:
+            col = heights.index(min(heights))
+            self._placed.append((g, col, heights[col]))
+            heights[col] += self.HEAD + self.ROW * len(g[2]) + 14
+        self.setFixedHeight(max(heights) if self.groups else 60)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        self._marks = []
+        if not self.groups:
+            self._empty(p)
+            return
+        top = max((n for _, _, parts in self.groups for _, n, _ in parts), default=0) or 1
+        fm = QFontMetrics(_font(12))
+        for (sub, color, parts), col, y in self._placed:
+            x = col * (self.COL_W + self.GAP)
+            total = sum(n for _, n, _ in parts)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(color))
+            p.drawRoundedRect(QRectF(x, y + 9, 10, 10), 2, 2)
+            p.setPen(QColor(INK))
+            p.setFont(_font(13, bold=True))
+            p.drawText(QRectF(x + 16, y, self.COL_W, 28), Qt.AlignVCenter, sub)
+            p.setPen(QColor(INK2 if total else MUTED))
+            p.setFont(_font(12, bold=bool(total)))
+            p.drawText(QRectF(x, y, self.COL_W - 4, 28), Qt.AlignVCenter | Qt.AlignRight, str(total))
+            p.setPen(QPen(QColor(GRID), 1))
+            p.drawLine(QPointF(x, y + self.HEAD - 2), QPointF(x + self.COL_W, y + self.HEAD - 2))
+            yy = y + self.HEAD
+            for label, n, value in parts:
+                row = QRectF(x, yy, self.COL_W, self.ROW)
+                i = len(self._marks)
+                if self._hover == i:
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(QColor("#F3F2EF"))
+                    p.drawRoundedRect(row, 4, 4)
+                if n:                                   # a light bar sized by count
+                    bar = QColor(color)
+                    bar.setAlpha(70)
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(bar)
+                    p.drawRoundedRect(QRectF(x + 2, yy + 4, (self.COL_W - 40) * n / top, self.ROW - 8), 3, 3)
+                p.setPen(QColor(INK if n else MUTED))
+                p.setFont(_font(12))
+                p.drawText(row.adjusted(8, 0, -36, 0), Qt.AlignVCenter,
+                           fm.elidedText(label, Qt.ElideRight, int(self.COL_W - 48)))
+                p.setFont(_font(12, bold=bool(n)))
+                p.drawText(row.adjusted(0, 0, -4, 0), Qt.AlignVCenter | Qt.AlignRight, str(n))
+                tip = f"<b>{sub} · {label}</b><br>{n} run{'s' if n != 1 else ''}"
+                self._marks.append((row, tip + (" — click to see them" if n else ""), value if n else None))
+                yy += self.ROW
+
+    def mousePressEvent(self, e):
+        i = self._hit(e.pos())
+        if i is not None and e.button() == Qt.LeftButton and self._marks[i][2] is not None:
+            self.picked.emit(self._marks[i][2])
