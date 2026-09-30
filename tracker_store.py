@@ -218,6 +218,18 @@ def done_date_column(tab):
             return c
     return None
 
+def created_date_column(tab):
+    """e.g. "Created" / "Date Opened" / "Reported On": when a bug was raised."""
+    for c in tab["columns"]:
+        w = _words(c["name"])
+        if c not in status_columns(tab) and (w & {"created", "opened", "reported", "raised"}) \
+                and (w & {"date", "on", "at"} or len(w) == 1):
+            return c
+    return None
+
+def is_bug_tab(tab):
+    return bool(done_date_column(tab) or created_date_column(tab)) and "bug" in tab["title"].lower()
+
 def in_range(value, rng):
     """rng: (first day, last day) or None for all dates."""
     d = parse_date(value)

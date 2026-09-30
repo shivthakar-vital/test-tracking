@@ -27,6 +27,7 @@ WIDTH = 1040                    # page width in pixels
 SCALE = 2                       # charts and the PNG are drawn at 2× for sharp text
 RUN_LIST_FOR = ("vitalone",)    # end-to-end trackers whose runs are listed with links
 INK, INK2, MUTED, LINE, GOOD_BG = "#1A1A18", "#52514E", "#8A8984", "#E6E4E0", "#E3F4E1"
+NEW_BG = "#E8F1FC"
 
 esc = html.escape
 
@@ -114,7 +115,7 @@ class Snapshot:
         tabs = self.data["tabs"]
         runs = [t for t in tabs if store.platform_column(t)]
         analysis = [t for t in runs if store.fault_column(t) or store.component_column(t)]
-        bugs = [t for t in tabs if store.done_date_column(t) and "bug" in t["title"].lower()]
+        bugs = [t for t in tabs if store.is_bug_tab(t)]
 
         body = [f'''
 <table width="100%" cellspacing="0" cellpadding="0"><tr>
@@ -252,36 +253,64 @@ class Snapshot:
         return "".join(out)
 
     def _bugs_section(self, tab):
+        """Status of all bugs now; counts of open / new / closed / in QA; and the bugs
+        opened and closed in the date range, with clickable keys."""
         rows = _rows(tab)
-        done_col = store.done_date_column(tab)
+        made, done_col = store.created_date_column(tab), store.done_date_column(tab)
         key_col = next((c for c in tab["columns"] if any(r["links"][c["pos"]] for r in rows)), tab["columns"][0])
         summary = next((c for c in tab["columns"] if "summary" in c["name"].lower()), None)
-        closed = [r for r in rows if store.in_range(r["values"][done_col["pos"]], self.rng)]
+        who = next((c for c in tab["columns"] if "assign" in c["name"].lower()), None)
+        val = lambda r, c: r["values"][c["pos"]] if c else ""
+        st = {id(r): store.row_status(tab, r) for r in rows}
+        is_done = lambda r: charts.classify(st[id(r)]) == "done" or bool(store.parse_date(val(r, done_col)))
+        open_ = [r for r in rows if not is_done(r)]
+        qa = [r for r in open_ if "qa" in st[id(r)].lower().split()]
+        new = [r for r in rows if made and store.in_range(val(r, made), self.rng)]
+        closed = [r for r in rows if done_col and store.in_range(val(r, done_col), self.rng)]
         donut, status, colors, order = self._status_donut(tab, rows)
-        out = [f'<table cellspacing="0" cellpadding="4"><tr>'
+
+        def tile(label, n, color, sub):
+            return (f'<td width="25%" valign="top" style="padding:8px 12px; border:1px solid {LINE}">'
+                    f'<span style="font-size:11px; color:{INK2}">{esc(label)}</span><br>'
+                    f'<span style="font-size:26px; font-weight:bold; color:{color}">{n}</span><br>'
+                    f'<span style="font-size:10px; color:{MUTED}">{esc(sub)}</span></td>')
+
+        tiles = ("<table width='100%' cellspacing='6' cellpadding='0'><tr>"
+                 + tile("Open now", len(open_), INK, f"{len(rows) - len(open_)} of {len(rows)} done")
+                 + tile("New", len(new), charts.PROGRESS, f"opened · {self.range_text}")
+                 + tile("Closed", len(closed), "#0B7A0B", f"done · {self.range_text}")
+                 + tile("In QA", len(qa), charts.QA, "waiting on QA now")
+                 + "</tr></table>")
+        out = [f'<table width="100%" cellspacing="0" cellpadding="4"><tr>'
                f'<td valign="top" width="400">{self._label("Status now (all bugs)")}{donut}</td>'
-               f'<td valign="top"><p style="font-size:34px; font-weight:bold; color:#0B7A0B; margin:0">'
-               f'{len(closed)}</p><p style="font-size:14px; margin-top:0">'
-               f'{"bug" if len(closed) == 1 else "bugs"} closed in <b>{esc(self.range_text)}</b></p>'
-               f'<p style="color:{MUTED}">{len(rows) - sum(bool(store.parse_date(r["values"][done_col["pos"]])) for r in rows)} '
-               f'of {len(rows)} bugs have no {esc(done_col["name"])} yet.</p></td></tr></table>']
-        if closed:
-            out += [f'<p style="margin-top:8px; margin-bottom:2px">{self._label("Closed in this range")}</p>',
-                    '<table width="100%" cellspacing="0" cellpadding="5">',
-                    "<tr>" + "".join(f"<th>{esc(h)}</th>" for h in
-                                     [key_col["name"], summary["name"] if summary else "", "Status",
-                                      done_col["name"]]) + "</tr>"]
-            for r in sorted(closed, key=lambda r: store.parse_date(r["values"][done_col["pos"]]), reverse=True):
-                link = r["links"][key_col["pos"]]
-                key = r["values"][key_col["pos"]]
+               f'<td valign="top">{self._label("New and closed · " + self.range_text)}{tiles}</td>'
+               f'</tr></table>']
+
+        def listing(title, items, date_col, bg, mark, empty):
+            if not items:
+                return (f'<p style="margin-top:10px">{self._label(title)}'
+                        f'<span style="color:{MUTED}">{esc(empty)}</span></p>')
+            head = [key_col["name"], summary["name"] if summary else "", "Status",
+                    who["name"] if who else "", date_col["name"]]
+            lines = [f'<p style="margin-top:10px; margin-bottom:2px">{self._label(f"{title} ({len(items)})")}</p>',
+                     '<table width="100%" cellspacing="0" cellpadding="5">',
+                     "<tr>" + "".join(f"<th>{esc(h)}</th>" for h in head) + "</tr>"]
+            for r in sorted(items, key=lambda r: store.parse_date(val(r, date_col)) or datetime.min.date(),
+                            reverse=True):
+                link, key = r["links"][key_col["pos"]], val(r, key_col)
                 keyh = f'<a href="{esc(link, quote=True)}">{esc(key)}</a>' if link else esc(key)
-                st = store.row_status(tab, r)
-                out.append(f'<tr bgcolor="{GOOD_BG}"><td><b>✓</b> {keyh}</td>'
-                           f'<td>{esc(r["values"][summary["pos"]]) if summary else ""}</td>'
-                           f'<td>{esc(st)}</td><td>{esc(r["values"][done_col["pos"]])}</td></tr>')
-            out.append("</table>")
-        else:
-            out.append(f'<p style="color:{MUTED}">No bugs were closed in {esc(self.range_text)}.</p>')
+                when = store.parse_date(val(r, date_col))
+                lines.append(f'<tr bgcolor="{bg}"><td>{mark}{keyh}</td><td>{esc(val(r, summary))}</td>'
+                             f'<td>{esc(st[id(r)])}</td><td>{esc(val(r, who))}</td>'
+                             f'<td>{f"{when.month}/{when.day}/{when.year}" if when else ""}</td></tr>')
+            lines.append("</table>")
+            return "".join(lines)
+
+        if made:
+            out.append(listing("New bugs", new, made, NEW_BG, "", f"No bugs were opened in {self.range_text}."))
+        if done_col:
+            out.append(listing("Closed bugs", closed, done_col, GOOD_BG, "<b>✓</b> ",
+                               f"No bugs were closed in {self.range_text}."))
         return "".join(out)
 
     # ── saving ────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ Build a double-clickable app:
     ./build_mac.sh
 """
 
-import os, re, subprocess, sys
+import html, os, re, subprocess, sys
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 
@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.0"         # bump this for each release, then push a matching tag (v1.1.0)
+APP_VERSION = "1.1.1"         # bump this for each release, then push a matching tag (v1.1.1)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -159,6 +159,12 @@ def _dot(color):
 
 def _version_tuple(v):
     return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+
+def _words_of(text):
+    return set(re.findall(r"[a-z]+", (text or "").lower()))
+
+def _plural_days(n):
+    return f"{n} day{'s' if n != 1 else ''}"
 
 def _visible_rows(tab):
     return [r for r in tab["rows"] if not store.is_blank(r)]
@@ -1555,10 +1561,10 @@ class ExportDialog(QDialog):
                 n = len(export_report._in_range(tab, rng))
                 bits.append(f"{tab['title'].replace(' End-to-End Tracker', '')}: "
                             f"{n} run{'s' if n != 1 else ''}")
-            done = store.done_date_column(tab)
-            if done and "bug" in tab["title"].lower():
-                n = sum(store.in_range(r["values"][done["pos"]], rng) for r in _visible_rows(tab))
-                bits.append(f"{n} bug{'s' if n != 1 else ''} closed")
+            if store.is_bug_tab(tab):
+                made, done = store.created_date_column(tab), store.done_date_column(tab)
+                count = lambda c: sum(store.in_range(r["values"][c["pos"]], rng) for r in _visible_rows(tab)) if c else 0
+                bits.append(f"bugs: {count(made)} new, {count(done)} closed")
         self.summary.setText(f"{self.label()} · " + " · ".join(bits) +
                              f"\nFiles: {self.base_name()}.png and .pdf")
 
@@ -1600,6 +1606,42 @@ def range_text(rng):
     if rng[0] == rng[1]:
         return f"{rng[0]:%a %b} {rng[0].day}"
     return f"{rng[0]:%b} {rng[0].day} – {rng[1]:%b} {rng[1].day}"
+
+
+class _FlowColumns(QWidget):
+    """Puts its widgets side by side when there's room, otherwise one under another."""
+
+    def __init__(self):
+        super().__init__()
+        self.items, self.cols = [], 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 4, 0, 0)
+        self.grid.setHorizontalSpacing(24)
+        self.grid.setVerticalSpacing(14)
+
+    def add(self, w):
+        w.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.items.append(w)
+        self._place()
+
+    def _needed(self):
+        return sum(w.sizeHint().width() for w in self.items) + 24 * (len(self.items) - 1)
+
+    def _place(self):
+        cols = len(self.items) if self.width() >= self._needed() or not self.width() else 1
+        if cols == self.cols and all(self.grid.indexOf(w) >= 0 for w in self.items):
+            return
+        self.cols = cols
+        for w in self.items:
+            self.grid.removeWidget(w)
+        for i, w in enumerate(self.items):
+            self.grid.addWidget(w, 0 if cols > 1 else i, i if cols > 1 else 0, Qt.AlignTop)
+        for c, w in enumerate(self.items):          # wider content gets a wider column
+            self.grid.setColumnStretch(c, w.sizeHint().width() if cols > 1 else int(c == 0))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place()
 
 
 class DateBar(QFrame):
@@ -1656,12 +1698,17 @@ class DateBar(QFrame):
         dash = self.win.dashboard
         dash.range = rng
         dash.range_text = range_text(rng)
-        dated = [t["title"] for t in (self.win.data or {}).get("tabs", []) if store.date_column(t)]
+        tabs = (self.win.data or {}).get("tabs", [])
+        dated = [t["title"] for t in tabs if store.date_column(t)]
+        bugs = [t["title"] for t in tabs if store.is_bug_tab(t)]
         if rng is None:
             self.note.setText("")
         else:
-            self.note.setText(f"Showing {dash.range_text} on " + (", ".join(dated) or "tabs with a date column")
-                              + ". Tabs without a date column show everything.")
+            parts = [", ".join(dated)] if dated else []
+            if bugs:
+                parts.append("new and closed bugs on " + ", ".join(bugs))
+            self.note.setText(f"Showing {dash.range_text} for " + ("; ".join(parts) or "dated tabs")
+                              + ". Other charts show everything.")
         if save:
             self.win.cfg["dash_dates"] = {"preset": name,
                                           "from": self.start.date().toString("M/d/yyyy"),
@@ -1841,7 +1888,12 @@ class Dashboard(QScrollArea):
         donut.set_data([(v, counts[v], colors.get(v, charts.PENDING)) for v in order],
                        (f"{round(100 * done / len(rows))}%", "done"))
         donut.picked.connect(lambda v, t=tab["title"]: self._go(t, {pos: {v}}))
-        charts_row.addWidget(self._titled(status["name"], donut), 0, Qt.AlignTop)
+        charts_row.addWidget(self._titled(status["name"] + " (all, as of now)" if store.is_bug_tab(tab)
+                                          else status["name"], donut), 0, Qt.AlignTop)
+        bug_lists = None
+        if store.is_bug_tab(tab):
+            summary, bug_lists = self._bug_summary(tab, rows, st)
+            charts_row.addWidget(summary, 1, Qt.AlignTop)
 
         pies = store.pie_columns(tab, rows, _settings(self.win))
         for pc in pies:
@@ -1881,6 +1933,8 @@ class Dashboard(QScrollArea):
             charts_row.addStretch(0)
         if bars_row.count():
             lay.addLayout(bars_row)
+        if bug_lists is not None:
+            lay.addWidget(bug_lists)
 
         dcol = store.date_column(tab)
         if dcol:
@@ -1899,6 +1953,118 @@ class Dashboard(QScrollArea):
                                          self._go(t, {dp: raw[ds[0]], pos: {ds[1]}}))
                 lay.addWidget(self._titled(f"Per day ({dcol['name']})", col_chart))
         return card
+
+    def _bug_summary(self, tab, rows, st):
+        """Next to the bug donut: open / new / closed / in QA, a one-line summary,
+        and short lists of the newest, recently closed, and waiting-in-QA bugs.
+        "New" and "Closed" follow the dashboard's date filter, like the other charts."""
+        today = date.today()
+        period, period_text = self.range, self.range_text
+        made, done_col = store.created_date_column(tab), store.done_date_column(tab)
+        key_col = next((c for c in tab["columns"] if any(r["links"][c["pos"]] for r in rows)),
+                       tab["columns"][0])
+        summary_col = next((c for c in tab["columns"] if "summary" in c["name"].lower()), None)
+        who_col = next((c for c in tab["columns"] if "assign" in c["name"].lower()), None)
+        spos = store.STATUS
+        val = lambda r, c: r["values"][c["pos"]] if c else ""
+        is_done = lambda r: charts.classify(st[id(r)]) == "done" or bool(store.parse_date(val(r, done_col)))
+        is_qa = lambda r: not is_done(r) and "qa" in _words_of(st[id(r)])
+
+        open_ = [r for r in rows if not is_done(r)]
+        new = [r for r in rows if made and store.in_range(val(r, made), period)]
+        closed = [r for r in rows if done_col and store.in_range(val(r, done_col), period)]
+        qa = [r for r in rows if is_qa(r)]
+        age = lambda r: (today - store.parse_date(val(r, made))).days if made and store.parse_date(val(r, made)) else None
+
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        lay.addWidget(_small_label(f"NEW AND CLOSED · {period_text.upper()}", "#888885", 10))
+
+        tiles = QHBoxLayout()
+        tiles.setSpacing(10)
+        title = tab["title"]
+        for label, n, color, sub, filters in [
+            ("Open now", len(open_), INK, f"{len(rows) - len(open_)} of {len(rows)} done",
+             {spos: {st[id(r)] for r in open_}}),
+            ("New", len(new), charts.PROGRESS, f"opened · {period_text}",
+             {made["pos"]: {val(r, made) for r in new}} if made else None),
+            ("Closed", len(closed), "#0B7A0B", f"done · {period_text}",
+             {done_col["pos"]: {val(r, done_col) for r in closed}} if done_col else None),
+            ("In QA", len(qa), charts.QA, "waiting on QA now", {spos: {st[id(r)] for r in qa}}),
+        ]:
+            tile = QFrame()
+            tile.setObjectName("tile")
+            tl = QVBoxLayout(tile)
+            tl.setContentsMargins(12, 8, 12, 8)
+            tl.setSpacing(0)
+            tl.addWidget(_small_label(label, "#666663", 11))
+            big = QLabel(str(n))
+            big.setStyleSheet(f"font-size:22px; font-weight:bold; color:{color};")
+            tl.addWidget(big)
+            tl.addWidget(_small_label(sub, MUTED, 10))
+            if filters is not None:
+                tile.setCursor(Qt.PointingHandCursor)
+                tile.setToolTip(f"See these {n} bugs")
+                tile.mousePressEvent = lambda e, f=filters or {spos: {"\0"}}: self._go(title, f)
+            tiles.addWidget(tile, 1)
+        lay.addLayout(tiles)
+
+        net = len(new) - len(closed)
+        first = f"<b>{period_text}:</b> {len(new)} new, {len(closed)} closed"
+        if period is not None:
+            first += f" (net {'+' if net > 0 else ''}{net})"
+        bits = [first, f"{len(open_)} open now", f"{len(qa)} in QA"]
+        oldest = max((r for r in open_ if age(r) is not None), key=age, default=None)
+        if oldest is not None:
+            bits.append(f"oldest open: {self._bug_link(oldest, key_col)} ({_plural_days(age(oldest))})")
+        line = QLabel(" · ".join(bits))
+        line.setTextFormat(Qt.RichText)
+        line.setOpenExternalLinks(True)
+        line.setWordWrap(True)
+        line.setStyleSheet("font-size:12px; color:#1A1A18;")
+        lay.addWidget(line)
+
+        lists = _FlowColumns()                   # full width, under the donut
+        newest = sorted(new, key=lambda r: store.parse_date(val(r, made)) or today, reverse=True)
+        recent = sorted(closed, key=lambda r: store.parse_date(val(r, done_col)) or today, reverse=True)
+        waiting = sorted(qa, key=lambda r: store.parse_date(val(r, made)) or today)
+        for heading, items, extra, color in [
+            ("New", newest, lambda r: st[id(r)], charts.PROGRESS),
+            ("Closed", recent, lambda r: val(r, done_col), "#0B7A0B"),
+            ("In QA", waiting, lambda r: val(r, who_col), charts.QA),
+        ]:
+            lists.add(self._bug_list(heading, items, key_col, summary_col, extra, color))
+        return box, lists
+
+    @staticmethod
+    def _bug_link(r, key_col):
+        key, link = r["values"][key_col["pos"]], r["links"][key_col["pos"]]
+        return f'<a href="{html.escape(link, quote=True)}" style="color:{LINK}">{html.escape(key)}</a>' \
+            if link else html.escape(key)
+
+    def _bug_list(self, heading, items, key_col, summary_col, extra, color, limit=5):
+        rows_html = []
+        for r in items[:limit]:
+            summ = r["values"][summary_col["pos"]] if summary_col else ""
+            summ = summ if len(summ) <= 36 else summ[:34].rstrip() + "…"
+            rows_html.append(f'<tr><td style="padding:3px 10px 3px 0; white-space:nowrap">'
+                             f'{self._bug_link(r, key_col)}</td>'
+                             f'<td style="padding:3px 10px 3px 0; color:#1A1A18; white-space:nowrap">'
+                             f'{html.escape(summ)}</td>'
+                             f'<td style="padding:3px 0; color:#8A8984; white-space:nowrap">'
+                             f'{html.escape(extra(r))}</td></tr>')
+        more = f'<br><span style="color:#8A8984">and {len(items) - limit} more</span>' if len(items) > limit else ""
+        body = (f'<table cellspacing="0">{"".join(rows_html)}</table>{more}' if items
+                else '<span style="color:#8A8984">None</span>')
+        lbl = QLabel(f'<span style="color:{color}; font-weight:bold">●</span> '
+                     f'<b>{html.escape(heading)}</b> <span style="color:#8A8984">({len(items)})</span><br>{body}')
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setOpenExternalLinks(True)
+        lbl.setStyleSheet("font-size:12px;")
+        lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        return lbl
 
     def _pie(self, tab, rows, st, col, palette=None):
         """A donut of categories, e.g. "Reason for Error Runs". Rows where the

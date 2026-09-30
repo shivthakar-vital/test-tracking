@@ -28,8 +28,13 @@ are written straight back to the sheet.
     of VitalOne runs with their Atlantis links
   - **Error Analysis**: the reason and subsystem pies, and a tally of the components that had
     runs
-  - **Bugs**: status of all bugs, and the bugs **closed in the date range** (from the bug tab's
-    *Done Date* column), highlighted in green
+  - **Bugs**: status of all bugs, the open / new / closed / in-QA counts, and the bugs
+    **opened** (blue) and **closed** (green) in the date range
+- **Bug summary** (tabs with *Created* and *Date Done* columns, like *Automated Bug Statuses*):
+  cards for **Open now**, **New**, **Closed**, and **In QA**, a one-line summary, and lists of
+  the new, closed, and in-QA bugs with clickable Jira keys. *New* and *Closed* follow the
+  dashboard's date filter; the donut, *Open now*, and *In QA* are always as of now. Click a
+  card to see those bugs.
 - **One tab per sheet tab**, with:
   - **Search** across every column
   - **Filters** for dropdown and grouping columns (*Status ▾*, *Equipment ▾*…). Tick the values
