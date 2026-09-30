@@ -14,7 +14,7 @@ Build a double-clickable app:
     ./build_mac.sh
 """
 
-import re, subprocess, sys
+import os, re, subprocess, sys
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 
@@ -35,10 +35,11 @@ from PyQt5.QtGui import (
 )
 
 import charts
+import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.0.9"         # bump this for each release, then push a matching tag (v1.0.9)
+APP_VERSION = "1.1.0"         # bump this for each release, then push a matching tag (v1.1.0)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -162,16 +163,7 @@ def _version_tuple(v):
 def _visible_rows(tab):
     return [r for r in tab["rows"] if not store.is_blank(r)]
 
-def _colors_for(tab, rows=None):
-    """(the row-status pseudo-column, {status value: color}) — covers every status
-    column, e.g. both "Coder E2E Status" and "Atlantis Status"."""
-    col = store.derived_columns(tab).get(store.STATUS)
-    if not col:
-        return None, {}
-    rows = tab["rows"] if rows is None else rows
-    values = {store.row_status(tab, r) for r in rows}
-    values |= {r["values"][c["pos"]].strip() for c in store.status_columns(tab) for r in rows}
-    return col, charts.status_colors(values, col["options"])
+_colors_for = charts.tab_colors
 
 def _settings(win):
     return (win.data or {}).get("settings") or {}
@@ -1462,10 +1454,157 @@ class TabPage(QWidget):
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
 
+class ExportDialog(QDialog):
+    """Pick the dates and where to save; saves a PNG and a matching PDF."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Export snapshot")
+        self.setMinimumWidth(560)
+        saved = win.cfg.get("export") or {}
+
+        intro = QLabel("Saves a one-page snapshot of the end-to-end runs, Error Analysis, and "
+                       "bugs closed in the dates you pick: a <b>PNG</b> to paste into Slack or "
+                       "email, and a matching <b>PDF</b> where run names and bug keys are "
+                       "clickable links.")
+        intro.setWordWrap(True)
+        self.preset = QComboBox()
+        self.preset.addItems([p for p in DATE_PRESETS])
+        self.preset.setCurrentText(saved.get("preset", "Today"))
+        self.start, self.end = QDateEdit(QDate.currentDate()), QDateEdit(QDate.currentDate())
+        for ed in (self.start, self.end):
+            ed.setCalendarPopup(True)
+            ed.setDisplayFormat("MMM d, yyyy")
+            ed.dateChanged.connect(self._update)
+        self.to_lbl = QLabel("to")
+        dates = QHBoxLayout()
+        dates.addWidget(self.preset)
+        dates.addWidget(self.start)
+        dates.addWidget(self.to_lbl)
+        dates.addWidget(self.end)
+        dates.addStretch(1)
+        self.preset.currentIndexChanged.connect(self._update)
+
+        self.folder = saved.get("folder") or os.path.expanduser("~/Downloads")
+        self.folder_lbl = QLabel()
+        self.folder_lbl.setMinimumWidth(300)
+        pick = QPushButton("Choose folder…")
+        pick.clicked.connect(self._pick_folder)
+        where = QHBoxLayout()
+        where.addWidget(self.folder_lbl, 1)
+        where.addWidget(pick)
+        self.summary = _small_label("", MUTED)
+        self.summary.setWordWrap(True)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.addRow("Dates", dates)
+        form.addRow("Save to", where)
+        form.addRow("", self.summary)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.go = buttons.addButton("⬇ Export PNG + PDF", QDialogButtonBox.AcceptRole)
+        self.go.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root = QVBoxLayout(self)
+        root.setSpacing(12)
+        root.addWidget(intro)
+        root.addLayout(form)
+        root.addWidget(buttons)
+        self._update()
+
+    def rng(self):
+        return range_for(self.preset.currentText(), _qdate(self.start), _qdate(self.end))
+
+    def label(self):
+        """e.g. "Today (Sep 30)", "Last 7 days (Sep 24 – Sep 30)", "Sep 24 – Sep 25"."""
+        name, rng = self.preset.currentText(), self.rng()
+        if rng is None or name in ("On a date…", "Date range…"):
+            return range_text(rng)
+        return f"{name} ({range_text(rng).replace(f'{rng[0]:%a} ', '')})"
+
+    def base_name(self):
+        rng = self.rng()
+        when = "all dates" if rng is None else (f"{rng[0]:%Y-%m-%d}" if rng[0] == rng[1]
+                                                else f"{rng[0]:%Y-%m-%d} to {rng[1]:%Y-%m-%d}")
+        title = re.sub(r'[\\/:*?"<>|]', "-", self.win.data["title"])
+        return f"{title} snapshot {when}"
+
+    def paths(self):
+        base = os.path.join(self.folder, self.base_name())
+        return base + ".png", base + ".pdf"
+
+    def _pick_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Save snapshots to", self.folder)
+        if folder:
+            self.folder = folder
+            self._update()
+
+    def _update(self, *_):
+        name = self.preset.currentText()
+        self.start.setVisible(name in ("On a date…", "Date range…"))
+        self.to_lbl.setVisible(name == "Date range…")
+        self.end.setVisible(name == "Date range…")
+        short = self.folder.replace(os.path.expanduser("~"), "~", 1)
+        self.folder_lbl.setText(self.folder_lbl.fontMetrics().elidedText(short, Qt.ElideMiddle, 320))
+        self.folder_lbl.setToolTip(self.folder)
+        rng, bits = self.rng(), []
+        for tab in self.win.data["tabs"]:
+            if store.platform_column(tab):
+                n = len(export_report._in_range(tab, rng))
+                bits.append(f"{tab['title'].replace(' End-to-End Tracker', '')}: "
+                            f"{n} run{'s' if n != 1 else ''}")
+            done = store.done_date_column(tab)
+            if done and "bug" in tab["title"].lower():
+                n = sum(store.in_range(r["values"][done["pos"]], rng) for r in _visible_rows(tab))
+                bits.append(f"{n} bug{'s' if n != 1 else ''} closed")
+        self.summary.setText(f"{self.label()} · " + " · ".join(bits) +
+                             f"\nFiles: {self.base_name()}.png and .pdf")
+
+    def accept(self):
+        self.win.cfg["export"] = {"preset": self.preset.currentText(), "folder": self.folder}
+        store.save_config(self.win.cfg)
+        super().accept()
+
+
+DATE_PRESETS = ["All dates", "Today", "Yesterday", "Last 7 days", "Last 30 days", "This month",
+                "On a date…", "Date range…"]
+
+def _qdate(ed):
+    d = ed.date()
+    return date(d.year(), d.month(), d.day())
+
+def range_for(name, start=None, end=None):
+    """(first day, last day) for a preset, or None for all dates. Presets are relative to today."""
+    today = date.today()
+    if name == "Today":
+        return today, today
+    if name == "Yesterday":
+        return today - timedelta(days=1), today - timedelta(days=1)
+    if name == "Last 7 days":
+        return today - timedelta(days=6), today
+    if name == "Last 30 days":
+        return today - timedelta(days=29), today
+    if name == "This month":
+        return today.replace(day=1), today
+    if name == "On a date…":
+        return start, start
+    if name == "Date range…":
+        return (start, end) if start <= end else (end, start)
+    return None
+
+def range_text(rng):
+    if rng is None:
+        return "All dates"
+    if rng[0] == rng[1]:
+        return f"{rng[0]:%a %b} {rng[0].day}"
+    return f"{rng[0]:%b} {rng[0].day} – {rng[1]:%b} {rng[1].day}"
+
+
 class DateBar(QFrame):
     """Dates ▾ [preset] [from] – [to] — narrows the dashboard to runs in that range."""
-    PRESETS = ["All dates", "Today", "Yesterday", "Last 7 days", "Last 30 days", "This month",
-               "On a date…", "Date range…"]
+    PRESETS = DATE_PRESETS
 
     def __init__(self, win):
         super().__init__()
@@ -1505,25 +1644,8 @@ class DateBar(QFrame):
             self.win.dashboard.set_data(self.win.data)
 
     def current_range(self):
-        """(first day, last day), or None for all dates. Presets are relative to today."""
-        today, name = date.today(), self.preset.currentText()
-        qd = lambda ed: date(ed.date().year(), ed.date().month(), ed.date().day())
-        if name == "Today":
-            return today, today
-        if name == "Yesterday":
-            return today - timedelta(days=1), today - timedelta(days=1)
-        if name == "Last 7 days":
-            return today - timedelta(days=6), today
-        if name == "Last 30 days":
-            return today - timedelta(days=29), today
-        if name == "This month":
-            return today.replace(day=1), today
-        if name == "On a date…":
-            return qd(self.start), qd(self.start)
-        if name == "Date range…":
-            a, b = qd(self.start), qd(self.end)
-            return (a, b) if a <= b else (b, a)
-        return None
+        """(first day, last day), or None for all dates."""
+        return range_for(self.preset.currentText(), _qdate(self.start), _qdate(self.end))
 
     def _apply(self, save):
         name = self.preset.currentText()
@@ -1533,12 +1655,7 @@ class DateBar(QFrame):
         rng = self.current_range()
         dash = self.win.dashboard
         dash.range = rng
-        if rng is None:
-            dash.range_text = "All dates"
-        elif rng[0] == rng[1]:
-            dash.range_text = f"{rng[0]:%a %b} {rng[0].day}"
-        else:
-            dash.range_text = f"{rng[0]:%b} {rng[0].day} – {rng[1]:%b} {rng[1].day}"
+        dash.range_text = range_text(rng)
         dated = [t["title"] for t in (self.win.data or {}).get("tabs", []) if store.date_column(t)]
         if rng is None:
             self.note.setText("")
@@ -1923,6 +2040,9 @@ class TrackerApp(QMainWindow):
         self.release.activated.connect(self._on_release_picked)
         top.addWidget(self.release)
         top.addStretch(1)
+        self.export_btn = QPushButton("⬇ Export snapshot")
+        self.export_btn.setToolTip("Save a PNG + PDF snapshot of the charts for a date range")
+        self.export_btn.clicked.connect(self._export)
         self.open_btn = QPushButton("Open in Google Sheets ↗")
         self.open_btn.clicked.connect(self._open_sheet)
         self.sync_btn = QPushButton("↻ Sync")
@@ -1930,7 +2050,7 @@ class TrackerApp(QMainWindow):
         self.sync_btn.clicked.connect(lambda: self._sync(quiet=False))
         settings_btn = QPushButton("⚙ Settings")
         settings_btn.clicked.connect(lambda: self._open_settings())
-        for b in (self.open_btn, self.sync_btn, settings_btn):
+        for b in (self.export_btn, self.open_btn, self.sync_btn, settings_btn):
             top.addWidget(b)
         root.addLayout(top)
 
@@ -2036,6 +2156,30 @@ class TrackerApp(QMainWindow):
         store.save_config(self.cfg)
         for page in self.pages.values():
             page.set_wrap(on)
+
+    def _export(self):
+        if not self.data:
+            QMessageBox.information(self, "Nothing to export yet", "Connect to a release sheet first.")
+            return
+        dlg = ExportDialog(self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        png, pdf = dlg.paths()
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            snap = export_report.Snapshot(self.data, dlg.rng(), dlg.label(), _settings(self))
+            snap.save_png(png)
+            snap.save_pdf(pdf)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Couldn't export", f"{type(exc).__name__}: {exc}")
+            return
+        QApplication.restoreOverrideCursor()
+        self._set_status(f"Saved {os.path.basename(png)} and .pdf")
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", png])          # show them in Finder
+        else:
+            _open_link(QUrl.fromLocalFile(os.path.dirname(png)).toString())
 
     def _open_sheet(self):
         page = self.tabs.currentWidget()

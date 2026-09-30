@@ -21,6 +21,15 @@ are written straight back to the sheet.
   *This month*, *On a date…*, or a *Date range…*. It narrows every chart and card for tabs that
   have a date column (e.g. the end-to-end run trackers); other tabs show everything. Clicking
   a chart opens the table with the same dates applied. Your choice is remembered.
+- **⬇ Export snapshot**: pick a date range (Today by default) and save a one-page summary
+  as a **PNG** (to paste into Slack or email) and a matching **PDF** (where run names and bug
+  keys are clickable links). It covers:
+  - **End-to-end runs**: status donut and Coder vs Atlantis for each run tracker, plus the list
+    of VitalOne runs with their Atlantis links
+  - **Error Analysis**: the reason and subsystem pies, and a tally of the components that had
+    runs
+  - **Bugs**: status of all bugs, and the bugs **closed in the date range** (from the bug tab's
+    *Done Date* column), highlighted in green
 - **One tab per sheet tab**, with:
   - **Search** across every column
   - **Filters** for dropdown and grouping columns (*Status ▾*, *Equipment ▾*…). Tick the values
@@ -182,7 +191,8 @@ To set up a new one (about 10 minutes):
 |------|------------|
 | `test_tracker.py` | The app: window, dashboard, tables, editing, updates |
 | `tracker_store.py` | Reading and writing the Google Sheet, settings, and the offline cache |
-| `charts.py` | The donut, bar, and per-day charts (drawn with Qt, no extra libraries) |
+| `charts.py` | The donut, bar, per-day, and tally charts (drawn with Qt, no extra libraries) |
+| `export_report.py` | The snapshot export: lays out the page and saves the PNG and PDF |
 | `install.sh` | The one-line installer and updater |
 | `build_mac.sh` | Builds the `.app` |
 | `.github/workflows/release.yml` | Builds and publishes a release when a `v*` tag is pushed |

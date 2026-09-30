@@ -464,3 +464,16 @@ class ComponentTally(_Chart):
         i = self._hit(e.pos())
         if i is not None and e.button() == Qt.LeftButton and self._marks[i][2] is not None:
             self.picked.emit(self._marks[i][2])
+
+
+def tab_colors(tab, rows=None):
+    """(the row-status pseudo-column, {status value: color}) for a sheet tab —
+    covers every status column, e.g. both "Coder E2E Status" and "Atlantis Status"."""
+    import tracker_store as store
+    col = store.derived_columns(tab).get(store.STATUS)
+    if not col:
+        return None, {}
+    rows = tab["rows"] if rows is None else rows
+    values = {store.row_status(tab, r) for r in rows}
+    values |= {r["values"][c["pos"]].strip() for c in store.status_columns(tab) for r in rows}
+    return col, status_colors(values, col["options"])

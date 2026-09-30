@@ -194,15 +194,34 @@ def is_blank(row):
     """Placeholder rows, e.g. a run number with nothing else filled in yet."""
     return not any(v.strip() for v in row["values"][1:])
 
+_DATE_FORMATS = ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%d %b %Y", "%b %d, %Y", "%d/%b/%y",
+                 "%d/%b/%Y", "%b %d %Y", "%m/%d")
+
 def parse_date(text):
+    """A date from the formats people and Jira use, ignoring any time of day:
+    9/30/2026, 2026-09-30, 2026-09-30T14:22:05.000-0700, 30/Sep/26 2:22 PM, Sep 30, 2026…"""
     text = (text or "").strip()
-    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%d %b %Y", "%b %d, %Y", "%m/%d"):
-        try:
-            d = datetime.strptime(text, fmt).date()
-            return d.replace(year=date.today().year) if fmt == "%m/%d" else d
-        except ValueError:
-            pass
+    for candidate in (text, re.split(r"[ T]", text, 1)[0]):
+        for fmt in _DATE_FORMATS:
+            try:
+                d = datetime.strptime(candidate, fmt).date()
+                return d.replace(year=date.today().year) if fmt == "%m/%d" else d
+            except ValueError:
+                pass
     return None
+
+def done_date_column(tab):
+    """e.g. "Done Date" / "Resolved" / "Closed Date": when a bug was completed."""
+    for c in tab["columns"]:
+        w = _words(c["name"])
+        if (w & {"done", "closed", "resolved", "completed"}) and (w & {"date", "on", "at"} or len(w) == 1):
+            return c
+    return None
+
+def in_range(value, rng):
+    """rng: (first day, last day) or None for all dates."""
+    d = parse_date(value)
+    return d is not None and (rng is None or rng[0] <= d <= rng[1])
 
 def status_column(tab):
     """The column that says how far along each row is (e.g. "Current Status")."""
