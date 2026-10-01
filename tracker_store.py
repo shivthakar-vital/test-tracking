@@ -259,7 +259,11 @@ RANDOM_WORDS = ("name", "link", "url", "serial", "key", "summary", "note", "comm
                 "image")
 CHART_OFF_BY_DEFAULT = {"workflow type", "equipment"}
 FILTER_PREFIX, CHART_PREFIX, PIE_PREFIX = "filter:", "chart:", "pie:"
-PIE_WORDS = ("why", "reason", "cause", "category", "categories")   # get their own pie chart
+PIE_WORDS = ("why", "reason", "cause", "category", "categories",  # get their own pie chart
+             "workflow", "workflows")
+
+def is_workflow(col):
+    return "workflow" in _words(col["name"])
 PLATFORM = "platform"      # derived column: which system a run was on (Coder / Atlantis)
 STATUS = "status"          # derived column: a row's status, from whichever status column is filled
 
@@ -280,10 +284,23 @@ def status_columns(tab):
     one = status_column(tab)
     return [one] if one else []
 
-def platform_column(tab):
-    """End-to-end trackers have a run name column: "Coder E2E" means the run was
-    on Coder, and any other (generated) name means it was on Atlantis."""
+def run_name_column(tab):
+    """End-to-end run trackers have a run name column (e.g. "Run Name w/ Link")."""
     return next((c for c in tab["columns"] if "run name" in c["name"].lower()), None)
+
+def is_run_tab(tab):
+    return run_name_column(tab) is not None
+
+def platform_column(tab):
+    """Run trackers whose runs can be on Coder or Atlantis: a run named "Coder E2E"
+    ran on Coder, any other (generated) name on Atlantis. Trackers with no Coder
+    status column and no Coder runs (e.g. Viking, always on Atlantis) have no split."""
+    col = run_name_column(tab)
+    if col is None:
+        return None
+    coder = any("coder" in c["name"].lower() for c in status_columns(tab)) or \
+        any("coder" in r["values"][col["pos"]].lower() for r in tab["rows"])
+    return col if coder else None
 
 def row_platform(tab, row):
     col = platform_column(tab)
@@ -370,8 +387,7 @@ def _default_on(tab, rows, col, purpose):
     if purpose == "chart" and col["name"].strip().lower() in CHART_OFF_BY_DEFAULT:
         return False
     if is_version(col):          # only Software Version: "how many runs per software version"
-        return "software" in col["name"].lower() and (purpose == "filter" or
-                                                      platform_column(tab) is not None)
+        return "software" in col["name"].lower() and (purpose == "filter" or is_run_tab(tab))
     if looks_random(col):
         return False
     vals = [v.strip() for r in rows for v in parts(col, r["values"][col["pos"]]) if v.strip()]

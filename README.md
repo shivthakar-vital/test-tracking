@@ -24,10 +24,11 @@ are written straight back to the sheet.
 - **⬇ Export snapshot**: pick a date range (Today by default) and save a one-page summary
   as a **PNG** (to paste into Slack or email) and a matching **PDF** (where run names and bug
   keys are clickable links). It covers:
-  - **End-to-end runs**: status donut and Coder vs Atlantis for each run tracker, plus the list
-    of VitalOne runs with their Atlantis links
-  - **Error Analysis**: the reason and subsystem pies, and a tally of the components that had
-    runs
+  - **End-to-end runs**, for each run tracker: status donut, workflow split, Coder vs Atlantis
+    (trackers that can run on Coder), runs per software version, and the list of runs with
+    their Atlantis links
+  - **Error Analysis**, combined across the run trackers: the reason and subsystem pies, and a
+    tally of the components that had runs, summed over VitalOne, Viking, and any others
   - **Bugs**: status of all bugs, the open / new / closed / in-QA counts, and the bugs
     **opened** (blue) and **closed** (green) in the date range
 - **Bug summary** (tabs with *Created* and *Date Done* columns, like *Automated Bug Statuses*):
@@ -74,17 +75,19 @@ every time it syncs:
   Status*). If a tab has several (*Coder E2E Status* and *Atlantis Status*), each row's
   status comes from the one that's filled in, preferring the one for the system the run
   was on.
-- **End-to-end trackers** (tabs with a *Run Name* column) get a **Ran on** filter and a
-  **Coder vs Atlantis** chart. A run named *Coder E2E* ran on Coder; any other name means
-  Atlantis. They also get a **Runs per Software Version** chart, newest version first.
+- **End-to-end trackers** (tabs with a *Run Name* column) get a **Runs per Software Version**
+  chart, newest version first, and a **Workflow Type** pie when that column is a dropdown.
+  Trackers that can run on Coder (they have a *Coder … Status* column) also get a **Ran on**
+  filter and a **Coder vs Atlantis** chart: a run named *Coder E2E* ran on Coder, any other
+  name on Atlantis. Trackers that always run on Atlantis (like Viking) don't.
 - **Filters and charts are strict by default.** Columns of generated or one-off values
   (names, links, IDs, serial numbers, notes, scripts, and version hashes other than
   *Software Version*) get no filter or chart. Other dropdowns and short, repeating text
   columns (like *System* or *Assignee*) do. *Workflow Type* and *Equipment* have filters
   but no charts. An admin can change any of this (see below).
-- **Category pies:** dropdown columns named like *Why?*, *Reason*, *Cause*, or *Category*
+- **Category pies:** dropdown columns named like *Why?*, *Reason*, *Cause*, *Category*, or *Workflow*
   get their own donut next to the status donut, with one fixed colour per option. Rows where
-  the column is blank are left out. Click a slice to see those rows.
+  the column is blank are left out, and pies with nothing in them are hidden. Click a slice to see those rows.
 - **Error Analysis card:** a tab with a *… At Fault* column (e.g. *Subsystem At Fault*) or a
   *… Component* dropdown whose options look like `Subsystem - Component` (e.g.
   `HT - Precision Stepper`) gets a second card under its own. It shows the category pies

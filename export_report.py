@@ -5,13 +5,14 @@ clickable).
 
 Both files come from one layout: an HTML page with the charts drawn as images,
 so they look the same. It covers:
-  • end-to-end run trackers: status donut, Coder vs Atlantis, and (for the
-    trackers in RUN_LIST_FOR) the list of runs with links
+  • end-to-end run trackers: status donut, workflow split, Coder vs Atlantis
+    (trackers that can run on Coder), runs per software version, and the list
+    of runs with links
   • Error Analysis: reason and subsystem pies, component tally
   • bug trackers: status donut, and the bugs closed in the date range, highlighted
 """
 
-import html
+import html, re
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -25,7 +26,6 @@ import tracker_store as store
 
 WIDTH = 1040                    # page width in pixels
 SCALE = 2                       # charts and the PNG are drawn at 2× for sharp text
-RUN_LIST_FOR = ("vitalone",)    # end-to-end trackers whose runs are listed with links
 INK, INK2, MUTED, LINE, GOOD_BG = "#1A1A18", "#52514E", "#8A8984", "#E6E4E0", "#E3F4E1"
 NEW_BG = "#E8F1FC"
 
@@ -41,6 +41,11 @@ def _in_range(tab, rng):
     if dcol is None or rng is None:
         return rows
     return [r for r in rows if store.in_range(r["values"][dcol["pos"]], rng)]
+
+def _natural(text):
+    """PROD-2 before PROD-10; v4.19.10 after v4.19.9."""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t)
+            for t in re.split(r"(\d+)", (text or "").lower()) if t]
 
 def _plural(n, word):
     return f"{n} {word}{'' if n == 1 else 's'}"
@@ -93,7 +98,11 @@ class Snapshot:
         for r in rows:
             for part in store.parts(col, store.value_of(tab, r, col)):
                 groups[part.strip()][store.row_status(tab, r)] += 1
-        names = sorted(groups, key=lambda k: (k == "", -sum(groups[k].values()), k))[:10]
+        if store.is_version(col):                  # newest version first
+            names = (sorted((k for k in groups if k), key=_natural, reverse=True)
+                     + ([""] if "" in groups else []))[:10]
+        else:
+            names = sorted(groups, key=lambda k: (k == "", -sum(groups[k].values()), k))[:10]
         b = charts.StackedBars()
         b.set_data([(n, [(v, groups[n][v], colors.get(v, charts.PENDING)) for v in order]) for n in names],
                    blank=store.blank_label(col))
@@ -101,7 +110,11 @@ class Snapshot:
 
     def _category_pie(self, rows, col, palette=None):
         counts = Counter(p.strip() for r in rows for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
-        options = list(palette or col["options"]) + sorted(v for v in counts if v not in (palette or col["options"]))
+        return self._counts_pie(counts, col["options"], palette)
+
+    def _counts_pie(self, counts, options, palette=None):
+        """A donut of category counts; colors follow the options' order (or `palette`)."""
+        options = list(palette or options) + sorted(v for v in counts if v not in (palette or options))
         palette = dict(palette or {})
         free = iter(c for c in charts.CATEGORICAL if c not in palette.values())
         for v in options:
@@ -113,7 +126,7 @@ class Snapshot:
 
     def _build(self):
         tabs = self.data["tabs"]
-        runs = [t for t in tabs if store.platform_column(t)]
+        runs = [t for t in tabs if store.is_run_tab(t)]
         analysis = [t for t in runs if store.fault_column(t) or store.component_column(t)]
         bugs = [t for t in tabs if store.is_bug_tab(t)]
 
@@ -129,9 +142,11 @@ class Snapshot:
             body.append(self._heading("End-to-End Runs"))
             for tab in runs:
                 body.append(self._runs_section(tab))
-        for tab in analysis:
-            body.append(self._heading(f"{tab['title']} — Error Analysis"))
-            body.append(self._analysis_section(tab))
+        if analysis:                       # one combined section for all run trackers
+            names = " + ".join(t["title"].replace(" End-to-End Tracker", "") for t in analysis)
+            body.append(self._heading(f"Error Analysis — {names}" if len(analysis) > 1 else
+                                      f"{analysis[0]['title']} — Error Analysis"))
+            body.append(self._analysis_section(analysis))
         for tab in bugs:
             body.append(self._heading(tab["title"]))
             body.append(self._bugs_section(tab))
@@ -179,36 +194,49 @@ class Snapshot:
             return "".join(out)
         donut, status, colors, order = self._status_donut(tab, rows)
         cells = [f'<td valign="top" width="400">{self._label(status["name"] if status else "Status")}{donut}</td>']
-        plat = store.derived_columns(tab).get(store.PLATFORM)
-        if plat:
-            cells.append(f'<td valign="top">{self._label("Runs on Coder vs Atlantis")}'
-                         f'{self._bars(tab, rows, plat, colors, order, 520)}</td>')
+        for wf in [c for c in store.pie_columns(tab, rows, self.settings) if store.is_workflow(c)]:
+            cells.append(f'<td valign="top">{self._label(wf["name"])}{self._category_pie(rows, wf)}</td>')
         out.append(f'<table cellspacing="0" cellpadding="4"><tr>{"".join(cells)}</tr></table>')
-        if any(w in tab["title"].lower() for w in RUN_LIST_FOR):
-            out.append(self._run_list(tab, rows, colors))
+
+        bars = []
+        plat = store.derived_columns(tab).get(store.PLATFORM)
+        version = next((c for c in tab["columns"] if store.is_version(c) and "software" in c["name"].lower()), None)
+        width = 480 if plat and version else 620
+        if plat:
+            bars.append(f'<td valign="top">{self._label("Runs on Coder vs Atlantis")}'
+                        f'{self._bars(tab, rows, plat, colors, order, width)}</td>')
+        if version and any(r["values"][version["pos"]].strip() for r in rows):
+            bars.append(f'<td valign="top">{self._label("Runs per " + version["name"])}'
+                        f'{self._bars(tab, rows, version, colors, order, width)}</td>')
+        if bars:
+            out.append(f'<table cellspacing="0" cellpadding="4"><tr>{"".join(bars)}</tr></table>')
+        out.append(self._run_list(tab, rows, colors))
         return "".join(out)
 
     def _run_list(self, tab, rows, colors):
-        dcol, name_col = store.date_column(tab), store.platform_column(tab)
-        reason = next(iter(store.pie_columns(tab, rows, self.settings)), None)
+        dcol, name_col = store.date_column(tab), store.run_name_column(tab)
+        plat = store.platform_column(tab)
+        pies = store.pie_columns(tab, rows, self.settings)
+        workflow = next((c for c in pies if store.is_workflow(c)), None)
+        reason = next((c for c in pies if not store.is_workflow(c)), None)
         fault = store.fault_column(tab)
-        head = ["Date", "Run", "Ran on", "Status"] + ([reason["name"]] if reason else []) + \
-               ([fault["name"]] if fault else [])
+        extra = [c for c in (workflow, reason, fault) if c]
+        head = ["Date", "Run"] + (["Ran on"] if plat else []) + ["Status"] + [c["name"] for c in extra]
         lines = [f'<p style="margin-top:8px; margin-bottom:2px">{self._label("Runs")}</p>',
                  '<table width="100%" cellspacing="0" cellpadding="5" style="border-collapse:collapse">',
                  "<tr>" + "".join(f"<th>{esc(h)}</th>" for h in head) + "</tr>"]
         key = lambda r: (store.parse_date(r["values"][dcol["pos"]]) if dcol else None) or datetime.min.date()
         for i, r in enumerate(sorted(rows, key=key, reverse=True)):
             name, link = r["values"][name_col["pos"]], r["links"][name_col["pos"]]
-            run = f'<a href="{esc(link, quote=True)}">{esc(name)}</a>' if link else esc(name)
+            run = (f'<a href="{esc(link, quote=True)}">{esc(name or "Open run")}</a>' if link
+                   else esc(name or "—"))
             st = store.row_status(tab, r)
             dot = f'<span style="color:{colors.get(st, charts.PENDING)}">●</span> ' if st else ""
-            cells = [r["values"][dcol["pos"]] if dcol else "", None, store.row_platform(tab, r), None]
-            vals = [esc(cells[0]), run, esc(cells[2]), dot + esc(st or "—")]
-            if reason:
-                vals.append(esc(r["values"][reason["pos"]] or "—"))
-            if fault:
-                vals.append(esc(r["values"][fault["pos"]] or "—"))
+            vals = [esc(r["values"][dcol["pos"]] if dcol else ""), run]
+            if plat:
+                vals.append(esc(store.row_platform(tab, r)))
+            vals.append(dot + esc(st or "—"))
+            vals += [esc(r["values"][c["pos"]] or "—") for c in extra]
             bg = ' bgcolor="#F7F7F5"' if i % 2 else ""
             lines.append(f"<tr{bg}>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>")
         lines.append("</table>")
@@ -218,34 +246,65 @@ class Snapshot:
                          f'in Atlantis (in the PDF).</p>')
         return "".join(lines)
 
-    def _analysis_section(self, tab):
-        rows = _in_range(tab, self.rng)
-        failed = sum(charts.classify(store.row_status(tab, r)) in ("blocked", "cancelled", "warning") for r in rows)
-        out = [f'<p style="color:{MUTED}; margin-bottom:4px">{_plural(failed, "failed run")} in '
-               f'{esc(self.range_text)} · blank cells are left out</p>']
-        if not rows:
-            out.append(f'<p style="color:{MUTED}">No runs in this date range.</p>')
+    def _analysis_section(self, tabs):
+        """Why runs failed, summed across the given run trackers: one pie per reason
+        column (matched by name), a Subsystem At Fault pie, and a tally of the
+        components that had runs. Dropdown options from every tab are combined."""
+        per_tab = [(t, _in_range(t, self.rng)) for t in tabs]
+        failed = {t["title"]: sum(charts.classify(store.row_status(t, r)) in ("blocked", "cancelled", "warning")
+                                  for r in rows) for t, rows in per_tab}
+        total_failed = sum(failed.values())
+        note = f"{_plural(total_failed, 'failed run')} in {esc(self.range_text)}"
+        if len(tabs) > 1:
+            note += ": " + " · ".join(f"{esc(k.replace(' End-to-End Tracker', ''))} {v}" for k, v in failed.items())
+        out = [f'<p style="color:{MUTED}; margin-bottom:4px">{note} · blank cells are left out</p>']
+
+        def combine(pick):
+            """(name, counts, options) for one kind of column, summed over the tabs."""
+            counts, options, name = Counter(), [], None
+            for tab, rows in per_tab:
+                col = pick(tab, rows)
+                if not col:
+                    continue
+                name = name or col["name"]
+                options += [o for o in col["options"] if o not in options]
+                counts.update(p.strip() for r in rows for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
+            options += sorted(v for v in counts if v not in options)
+            return name, counts, options
+
+        # reason-style pies, matched across tabs by column name (e.g. "Reason for Error Runs")
+        reason_names = list(dict.fromkeys(c["name"].strip().lower() for t, rows in per_tab
+                                          for c in store.pie_columns(t, rows, self.settings)
+                                          if not store.is_workflow(c)))
+        comp_name, comp_counts, comp_opts = combine(lambda t, rows: store.component_column(t))
+        subsystems = list(dict.fromkeys(store.split_component(o)[0] for o in comp_opts))
+        sub_colors = {s_: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, s_ in enumerate(subsystems)}
+
+        cells = []
+        for key in reason_names:
+            name, counts, opts = combine(lambda t, rows, k=key: next(
+                (c for c in t["columns"] if c["name"].strip().lower() == k), None))
+            if counts:
+                cells.append(f'<td valign="top" width="400">{self._label(name)}'
+                             f'{self._counts_pie(counts, opts)}</td>')
+        f_name, f_counts, f_opts = combine(lambda t, rows: store.fault_column(t))
+        if f_counts:
+            cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, sub_colors)}</td>')
+        if not cells and not comp_counts:
+            out.append(f'<p style="color:{MUTED}">No reasons or subsystems recorded in this date range.</p>')
             return "".join(out)
-        fault, comp = store.fault_column(tab), store.component_column(tab)
-        subsystems = list(dict.fromkeys(store.split_component(o)[0] for o in (comp or {}).get("options", [])))
-        sub_colors = {s: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, s in enumerate(subsystems)}
-        cells = [f'<td valign="top" width="400">{self._label(pc["name"])}{self._category_pie(rows, pc)}</td>'
-                 for pc in store.pie_columns(tab, rows, self.settings)]
-        if fault:
-            cells.append(f'<td valign="top">{self._label(fault["name"])}'
-                         f'{self._category_pie(rows, fault, sub_colors)}</td>')
-        out.append(f'<table cellspacing="0" cellpadding="4"><tr>{"".join(cells)}</tr></table>')
-        if comp:
-            counts = Counter(p.strip() for r in rows for p in store.parts(comp, r["values"][comp["pos"]]) if p.strip())
+        if cells:
+            out.append(f'<table cellspacing="0" cellpadding="4"><tr>{"".join(cells)}</tr></table>')
+        if comp_name:
             groups = {}                    # only components with at least one run
-            for value in list(comp["options"]) + sorted(v for v in counts if v not in comp["options"]):
-                if counts[value]:
+            for value in comp_opts:
+                if comp_counts[value]:
                     sub, part = store.split_component(value)
-                    groups.setdefault(sub, []).append((part or value, counts[value], value))
-            label = self._label(comp["name"] + " tally, by subsystem")
+                    groups.setdefault(sub, []).append((part or value, comp_counts[value], value))
+            label = self._label(comp_name + " tally, by subsystem")
             if groups:
                 tally = charts.ComponentTally()
-                tally.set_data([(s, sub_colors.get(s, charts.PENDING), parts) for s, parts in groups.items()])
+                tally.set_data([(s_, sub_colors.get(s_, charts.PENDING), parts) for s_, parts in groups.items()])
                 out.append(f'<p style="margin-top:6px">{label}{self._image(tally, WIDTH - 40)}</p>')
             else:
                 out.append(f'<p style="margin-top:6px">{label}<span style="color:{MUTED}">'

@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.1"         # bump this for each release, then push a matching tag (v1.1.1)
+APP_VERSION = "1.1.2"         # bump this for each release, then push a matching tag (v1.1.2)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1557,7 +1557,7 @@ class ExportDialog(QDialog):
         self.folder_lbl.setToolTip(self.folder)
         rng, bits = self.rng(), []
         for tab in self.win.data["tabs"]:
-            if store.platform_column(tab):
+            if store.is_run_tab(tab):
                 n = len(export_report._in_range(tab, rng))
                 bits.append(f"{tab['title'].replace(' End-to-End Tracker', '')}: "
                             f"{n} run{'s' if n != 1 else ''}")
@@ -1828,7 +1828,7 @@ class Dashboard(QScrollArea):
             big.setStyleSheet("font-size:24px; font-weight:bold;")
             bits = [f"{done} of {total} done"]
             if cls["blocked"]:
-                bits.append(f"{cls['blocked']} " + ("failed" if store.platform_column(tab) else "blocked"))
+                bits.append(f"{cls['blocked']} " + ("failed" if store.is_run_tab(tab) else "blocked"))
             if cls["active"]:
                 bits.append(f"{cls['active']} in progress")
             if self._dated(tab):
@@ -1895,7 +1895,8 @@ class Dashboard(QScrollArea):
             summary, bug_lists = self._bug_summary(tab, rows, st)
             charts_row.addWidget(summary, 1, Qt.AlignTop)
 
-        pies = store.pie_columns(tab, rows, _settings(self.win))
+        has_data = lambda c: any(r["values"][c["pos"]].strip() for r in rows)
+        pies = [c for c in store.pie_columns(tab, rows, _settings(self.win)) if has_data(c)]
         for pc in pies:
             charts_row.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
         bars_row = charts_row
@@ -1924,7 +1925,7 @@ class Dashboard(QScrollArea):
                                 self._go(t, {gp: {gv[0]}, pos: {gv[1]}}))
             if g["pos"] == store.PLATFORM:
                 title = "Runs on Coder vs Atlantis"
-            elif store.is_version(g) and store.platform_column(tab):
+            elif store.is_version(g) and store.is_run_tab(tab):
                 title = f"Runs per {g['name']}"
             else:
                 title = f"{status['name']} by {g['name']}"
@@ -2121,10 +2122,16 @@ class Dashboard(QScrollArea):
 
         pies = QHBoxLayout()
         pies.setSpacing(28)
+        has_data = lambda c: any(r["values"][c["pos"]].strip() for r in rows)
         for pc in store.pie_columns(tab, rows, _settings(self.win)):
-            pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
-        if fault:
+            if not store.is_workflow(pc) and has_data(pc):
+                pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
+        if fault and has_data(fault):
             pies.addWidget(self._pie(tab, rows, st, fault, palette=sub_colors), 0, Qt.AlignTop)
+        if not pies.count() and not (comp and has_data(comp)):
+            lay.addWidget(_small_label("No reasons or subsystems recorded yet"
+                                       + (" in the chosen dates." if self._dated(tab) else "."), MUTED))
+            return card
         pies.addStretch(1)
         lay.addLayout(pies)
 
