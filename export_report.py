@@ -56,6 +56,8 @@ class Snapshot:
         self.data, self.rng, self.range_text = data, rng, range_text
         self.settings = settings or {}
         self.images = {}                 # resource name → QImage
+        charts.set_overrides(store.color_overrides(self.settings))
+        charts.register(data)            # same colors as the dashboard
         self.doc = self._build()
 
     # ── charts as images ──────────────────────────────────────────────────────
@@ -108,17 +110,17 @@ class Snapshot:
                    blank=store.blank_label(col))
         return self._image(b, width)
 
-    def _category_pie(self, rows, col, palette=None):
+    def _category_pie(self, rows, col):
         counts = Counter(p.strip() for r in rows for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
-        return self._counts_pie(counts, col["options"], palette)
+        return self._counts_pie(counts, col["options"], col["name"])
 
-    def _counts_pie(self, counts, options, palette=None):
-        """A donut of category counts; colors follow the options' order (or `palette`)."""
-        options = list(palette or options) + sorted(v for v in counts if v not in (palette or options))
-        palette = dict(palette or {})
-        free = iter(c for c in charts.CATEGORICAL if c not in palette.values())
-        for v in options:
-            palette.setdefault(v, next(free, charts.PENDING))
+    def _counts_pie(self, counts, options, column, subsystem=False):
+        """A donut of category counts, in the app's shared colors for that column
+        (or for subsystems), so they match the dashboard."""
+        base = charts.SUBSYSTEM_ORDER if subsystem else options
+        options = [v for v in base if v in counts] + sorted(v for v in counts if v not in base)
+        palette = {v: charts.subsystem_color(v) if subsystem else charts.category_color(column, v)
+                   for v in options}
         total = sum(counts.values())
         return self._donut(counts, palette, options, (str(total), "run" if total == 1 else "runs"))
 
@@ -277,8 +279,6 @@ class Snapshot:
                                           for c in store.pie_columns(t, rows, self.settings)
                                           if not store.is_workflow(c)))
         comp_name, comp_counts, comp_opts = combine(lambda t, rows: store.component_column(t))
-        subsystems = list(dict.fromkeys(store.split_component(o)[0] for o in comp_opts))
-        sub_colors = {s_: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, s_ in enumerate(subsystems)}
 
         cells = []
         for key in reason_names:
@@ -286,10 +286,10 @@ class Snapshot:
                 (c for c in t["columns"] if c["name"].strip().lower() == k), None))
             if counts:
                 cells.append(f'<td valign="top" width="400">{self._label(name)}'
-                             f'{self._counts_pie(counts, opts)}</td>')
+                             f'{self._counts_pie(counts, opts, name)}</td>')
         f_name, f_counts, f_opts = combine(lambda t, rows: store.fault_column(t))
         if f_counts:
-            cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, sub_colors)}</td>')
+            cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, f_name, subsystem=True)}</td>')
         if not cells and not comp_counts:
             out.append(f'<p style="color:{MUTED}">No reasons or subsystems recorded in this date range.</p>')
             return "".join(out)
@@ -304,7 +304,7 @@ class Snapshot:
             label = self._label(comp_name + " tally, by subsystem")
             if groups:
                 tally = charts.ComponentTally()
-                tally.set_data([(s_, sub_colors.get(s_, charts.PENDING), parts) for s_, parts in groups.items()])
+                tally.set_data([(s_, charts.subsystem_color(s_), parts) for s_, parts in groups.items()])
                 out.append(f'<p style="margin-top:6px">{label}{self._image(tally, WIDTH - 40)}</p>')
             else:
                 out.append(f'<p style="margin-top:6px">{label}<span style="color:{MUTED}">'

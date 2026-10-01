@@ -22,14 +22,20 @@ INK, INK2, MUTED, GRID = "#1A1A18", "#52514E", "#999996", "#ECEAE6"
 GOOD, CRITICAL, SERIOUS, WARNING = "#0CA30C", "#D03B3B", "#EC835A", "#FAB219"
 PROGRESS, REVIEW, QA = "#2A78D6", "#4A3AA7", "#E87BA4"
 PENDING, DEFERRED = "#C9C8C2", "#7A7974"
-CATEGORICAL = ["#2A78D6", "#EB6834", "#1BAF7A", "#EDA100", "#E87BA4", "#008300", "#4A3AA7", "#E34948"]
+# Colors for categories (workflows, reasons, subsystems, unrecognised statuses).
+# No greens: green means finished (Done, Completed, Results…). The order keeps
+# neighbours distinct for normal and red-green colorblind vision (OKLab ΔE ≥ 15
+# between any two, ≥ 8 between neighbours as seen with deuteranopia/protanopia).
+CATEGORICAL = ["#2A78D6", "#EB6834", "#B5478F", "#EDA100", "#0E8FB3", "#9C5B2E", "#4A3AA7", "#E87BA4",
+               "#2C3E50", "#39D4E5"]
 
 # (keywords, class, color) — checked in order, so "no results" wins over "results"
 _RULES = [
+    (("won't", "wont"),                                             "done",     GOOD),      # Won't Do / Won't Fix: closed
     (("block", "error", "fail", "broken"),                          "blocked",  CRITICAL),
     (("cancel", "abort"),                                          "cancelled", SERIOUS),
     (("no result", "warn", "partial", "flaky"),                     "warning",  WARNING),
-    (("defer", "next release", "wont", "won't", "descoped"),        "deferred", DEFERRED),
+    (("defer", "next release", "descoped"),                         "deferred", DEFERRED),
     (("not started", "not run", "to do", "todo", "created", "backlog", "open", "new", "pending"),
                                                                     "pending",  PENDING),
     (("review",),                                                   "active",   REVIEW),
@@ -57,6 +63,58 @@ OVERRIDES = {}      # {status value (lower case): color}, chosen by the admin in
 def set_overrides(colors):
     OVERRIDES.clear()
     OVERRIDES.update(colors or {})
+
+
+# One color per subsystem and per category value, the same on every card, tab
+# and export. The order comes from the dropdown options across the whole sheet.
+SUBSYSTEM_ORDER = []          # e.g. ["CC", "Drawer", "Gantry", "HT", "IA"]
+CATEGORY_ORDER = {}           # column name (lower case) → its values in order
+SUBSYSTEM_KEY = "subsystem"   # admin overrides: "subsystem:ia", "workflow type:cc12n dry"
+
+def register(data):
+    """Learn every subsystem and category value in the sheet, so colors don't
+    depend on which tab or date range is on screen."""
+    import tracker_store as store
+    subs, cats = [], {}
+    for tab in data.get("tabs", []):
+        comp = store.component_column(tab)
+        for o in (comp or {}).get("options", []):
+            sub = store.split_component(o)[0]
+            if sub and sub not in subs:
+                subs.append(sub)
+        fault = store.fault_column(tab)
+        for r in tab["rows"] if fault else []:
+            v = r["values"][fault["pos"]].strip()
+            if v and v not in subs:
+                subs.append(v)
+        for c in tab["columns"]:
+            if store.wants_pie(c):
+                vals = cats.setdefault(c["name"].strip().lower(), [])
+                for v in list(c["options"]) + [r["values"][c["pos"]].strip() for r in tab["rows"]]:
+                    for part in store.parts(c, v):
+                        if part.strip() and part.strip() not in vals:
+                            vals.append(part.strip())
+    SUBSYSTEM_ORDER[:] = subs
+    CATEGORY_ORDER.clear()
+    CATEGORY_ORDER.update(cats)
+
+def _slot(order, value):
+    if value not in order:
+        order.append(value)
+    return CATEGORICAL[order.index(value) % len(CATEGORICAL)]
+
+def subsystem_color(name, use_overrides=True):
+    key = f"{SUBSYSTEM_KEY}:{name.strip().lower()}"
+    if use_overrides and key in OVERRIDES:
+        return OVERRIDES[key]
+    return _slot(SUBSYSTEM_ORDER, name.strip())
+
+def category_color(column, value, use_overrides=True):
+    col = column.strip().lower()
+    key = f"{col}:{value.strip().lower()}"
+    if use_overrides and key in OVERRIDES:
+        return OVERRIDES[key]
+    return _slot(CATEGORY_ORDER.setdefault(col, []), value.strip())
 
 
 def status_colors(values, options=(), use_overrides=True):

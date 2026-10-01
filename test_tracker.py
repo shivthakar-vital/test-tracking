@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.2"         # bump this for each release, then push a matching tag (v1.1.2)
+APP_VERSION = "1.1.3"         # bump this for each release, then push a matching tag (v1.1.3)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -372,59 +372,92 @@ class NewPasscodeDialog(QDialog):
 
 
 class ColorsDialog(QDialog):
-    """Pick the colour for each status value. Applies to every chart, card and status dot."""
+    """Pick the colour of anything the charts color: statuses, subsystems, and the
+    values of category pies (reasons, workflows…). Applies to every chart, card,
+    status dot and export, for everyone."""
 
     def __init__(self, win, data, overrides):
         super().__init__(win)
         self.win = win
         self.setWindowTitle("Chart colours")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(660)
         self.overrides = dict(overrides)
         self.changed_passcode = None
+        charts.register(data)
+        self.entries, self.by_key = [], {}
 
-        # every status value in the sheet, with the tabs it's used in
-        found, order = {}, []
+        def add(section, key, label, tab, default):
+            if key in self.by_key:
+                if tab not in self.by_key[key]["tabs"]:
+                    self.by_key[key]["tabs"].append(tab)
+                return
+            e = {"section": section, "key": key, "label": label, "tabs": [tab], "default": default}
+            self.entries.append(e)
+            self.by_key[key] = e
+
+        # 1. statuses, in order of meaning
         for tab in data["tabs"]:
             col = store.derived_columns(tab).get(store.STATUS)
             if not col:
                 continue
             values = list(col["options"]) + [store.row_status(tab, r) for r in _visible_rows(tab)]
             for v in charts.status_order(dict.fromkeys(values), col["options"]):
-                key = v.strip().lower()
-                if key not in found:
-                    found[key] = {"label": v.strip() or "No status", "tabs": [], "options": col["options"]}
-                    order.append(key)
-                if tab["title"] not in found[key]["tabs"]:
-                    found[key]["tabs"].append(tab["title"])
-        self.found, self.order = found, order
+                add("Statuses", v.strip().lower(), v.strip() or "No status", tab["title"],
+                    lambda v=v, o=col["options"]: charts.status_colors([v], o, use_overrides=False)[v])
+        # 2. subsystems (Subsystem At Fault pie and the component tally)
+        sub_tabs = [t["title"] for t in data["tabs"] if store.fault_column(t) or store.component_column(t)]
+        for sub in list(charts.SUBSYSTEM_ORDER):
+            for t in sub_tabs:
+                add("Subsystems", f"{charts.SUBSYSTEM_KEY}:{sub.lower()}", sub, t,
+                    lambda sub=sub: charts.subsystem_color(sub, use_overrides=False))
+        # 3. each category pie's values (Reason for Error Runs, Workflow Type…)
+        for tab in data["tabs"]:
+            for c in tab["columns"]:
+                if not store.wants_pie(c):
+                    continue
+                col = c["name"].strip().lower()
+                for v in list(charts.CATEGORY_ORDER.get(col, [])):
+                    add(c["name"].strip(), f"{col}:{v.lower()}", v, tab["title"],
+                        lambda col=col, v=v: charts.category_color(col, v, use_overrides=False))
+        self.sections = list(dict.fromkeys(e["section"] for e in self.entries))
+        self.preview_section = self.sections[0] if self.sections else None
 
         intro = QLabel("Click a colour to change it. Your choices are saved in the sheet, so "
-                       "everyone sees them after their next sync. Statuses keep their built-in "
-                       "colour until you change them.")
+                       "everyone sees them after their next sync, on the dashboard and in exports. "
+                       "Anything you don't change keeps its built-in colour. Green is kept for "
+                       "finished statuses (Done, Completed, Results…).")
         intro.setWordWrap(True)
         self.rows = QGridLayout()
         self.rows.setHorizontalSpacing(12)
         self.rows.setVerticalSpacing(6)
         self.swatches, self.resets = {}, {}
-        for i, key in enumerate(order):
-            info = found[key]
-            sw = QPushButton()
-            sw.setFixedSize(46, 26)
-            sw.setCursor(Qt.PointingHandCursor)
-            sw.clicked.connect(lambda _, k=key: self._pick(k))
-            name = QLabel(info["label"])
-            name.setStyleSheet("font-size:13px;")
-            where = _small_label(", ".join(info["tabs"]), MUTED)
-            where.setToolTip("Used in: " + ", ".join(info["tabs"]))
-            reset = QPushButton("Reset")
-            reset.setObjectName("link")
-            reset.setToolTip("Go back to the built-in colour")
-            reset.clicked.connect(lambda _, k=key: self._reset(k))
-            self.swatches[key], self.resets[key] = sw, reset
-            self.rows.addWidget(sw, i, 0)
-            self.rows.addWidget(name, i, 1)
-            self.rows.addWidget(where, i, 2)
-            self.rows.addWidget(reset, i, 3)
+        i = 0
+        for section in self.sections:
+            head = _small_label(section.upper(), "#888885", 10)
+            head.setStyleSheet("color:#888885; font-size:10px; font-weight:bold; margin-top:8px;")
+            self.rows.addWidget(head, i, 0, 1, 4)
+            i += 1
+            for e in [e for e in self.entries if e["section"] == section]:
+                key = e["key"]
+                sw = QPushButton()
+                sw.setFixedSize(46, 26)
+                sw.setCursor(Qt.PointingHandCursor)
+                sw.clicked.connect(lambda _, k=key: self._pick(k))
+                name = QLabel(e["label"])
+                name.setStyleSheet("font-size:13px;")
+                where = _small_label(", ".join(e["tabs"]), MUTED)
+                where.setToolTip("Used in: " + ", ".join(e["tabs"]))
+                where.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # shrink, keep Reset visible
+                reset = QPushButton("Reset")
+                reset.setObjectName("link")
+                reset.setToolTip("Go back to the built-in colour")
+                reset.clicked.connect(lambda _, k=key: self._reset(k))
+                self.swatches[key], self.resets[key] = sw, reset
+                self.rows.addWidget(sw, i, 0)
+                self.rows.addWidget(name, i, 1)
+                self.rows.addWidget(where, i, 2)
+                self.rows.addWidget(reset, i, 3)
+                i += 1
         self.rows.setColumnStretch(2, 1)
         inner = QWidget()
         inner.setLayout(self.rows)
@@ -432,13 +465,14 @@ class ColorsDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidget(inner)
-        scroll.setMinimumHeight(min(34 * len(order) + 10, 380))
+        scroll.setMinimumHeight(min(32 * i + 10, 400))
 
         self.preview = charts.DonutChart()
         preview_box = QFrame()
         preview_box.setObjectName("card")
         pl = QVBoxLayout(preview_box)
-        pl.addWidget(_small_label("PREVIEW", "#888885", 10))
+        self.preview_lbl = _small_label("PREVIEW", "#888885", 10)
+        pl.addWidget(self.preview_lbl)
         pl.addWidget(self.preview)
 
         reset_all = QPushButton("Reset all to built-in colours")
@@ -459,21 +493,17 @@ class ColorsDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(10)
         root.addWidget(intro)
-        if not order:
-            root.addWidget(_small_label("No status columns found in this sheet yet.", MUTED))
+        if not self.entries:
+            root.addWidget(_small_label("Nothing in this sheet is colored yet.", MUTED))
         root.addWidget(scroll)
         root.addWidget(preview_box)
         root.addLayout(extra)
         root.addWidget(buttons)
+        self.resize(720, 760)
         self._refresh()
 
-    def _default(self, key):
-        info = self.found[key]
-        value = next((o for o in info["options"] if o.strip().lower() == key), info["label"] if key else "")
-        return charts.status_colors([value], info["options"], use_overrides=False)[value]
-
     def color(self, key):
-        return self.overrides.get(key) or self._default(key)
+        return self.overrides.get(key) or self.by_key[key]["default"]()
 
     def _refresh(self):
         for key, sw in self.swatches.items():
@@ -482,17 +512,22 @@ class ColorsDialog(QDialog):
                              f"QPushButton:hover {{ border:2px solid #1A1A18; }}")
             sw.setToolTip(f"{c.upper()} — click to change")
             self.resets[key].setVisible(key in self.overrides)
-        self.preview.set_data([(self.found[k]["label"], 1, self.color(k)) for k in self.order[:10]],
-                              ("", ""))
+        shown = [e for e in self.entries if e["section"] == self.preview_section][:10]
+        self.preview_lbl.setText(f"PREVIEW · {(self.preview_section or '').upper()}")
+        self.preview.set_data([(e["label"], 1, self.color(e["key"])) for e in shown], ("", ""))
 
     def _pick(self, key):
-        c = QColorDialog.getColor(QColor(self.color(key)), self, f"Colour for {self.found[key]['label']}")
+        e = self.by_key[key]
+        self.preview_section = e["section"]
+        self._refresh()
+        c = QColorDialog.getColor(QColor(self.color(key)), self, f"Colour for {e['label']}")
         if c.isValid():
             self.overrides[key] = c.name().upper()
             self._refresh()
 
     def _reset(self, key):
         self.overrides.pop(key, None)
+        self.preview_section = self.by_key[key]["section"]
         self._refresh()
 
     def _reset_all(self):
@@ -2067,18 +2102,16 @@ class Dashboard(QScrollArea):
         lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         return lbl
 
-    def _pie(self, tab, rows, st, col, palette=None):
+    def _pie(self, tab, rows, st, col, subsystem=False):
         """A donut of categories, e.g. "Reason for Error Runs". Rows where the
-        column is blank are left out."""
+        column is blank are left out. Colors are shared across the whole app
+        (one per value, or per subsystem for "Subsystem At Fault")."""
         counts = Counter(p.strip() for r in rows
                          for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
-        options = list(col["options"]) + sorted(v for v in counts if v not in col["options"])
-        if palette is None:
-            palette = {v: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, v in enumerate(options)}
-        else:
-            options = list(palette) + sorted(v for v in counts if v not in palette)
-            extra = iter(c for c in charts.CATEGORICAL if c not in palette.values())
-            palette = dict(palette, **{v: next(extra, charts.PENDING) for v in options if v not in palette})
+        base = charts.SUBSYSTEM_ORDER if subsystem else col["options"]
+        options = [v for v in base if v in counts] + sorted(v for v in counts if v not in base)
+        palette = {v: charts.subsystem_color(v) if subsystem else charts.category_color(col["name"], v)
+                   for v in options}
         pie = charts.DonutChart()
         total = sum(counts.values())
         pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
@@ -2093,11 +2126,6 @@ class Dashboard(QScrollArea):
         st = {id(r): store.row_status(tab, r) for r in rows}
         fault, comp = store.fault_column(tab), store.component_column(tab)
 
-        # one color per subsystem, in the component dropdown's order, shared by pie and tally
-        subsystems = list(dict.fromkeys(store.split_component(o)[0] for o in (comp or {}).get("options", [])))
-        if fault:
-            subsystems += sorted({r["values"][fault["pos"]].strip() for r in rows} - set(subsystems) - {""})
-        sub_colors = {s_: charts.CATEGORICAL[i % len(charts.CATEGORICAL)] for i, s_ in enumerate(subsystems)}
 
         card = QFrame()
         card.setObjectName("card")
@@ -2127,7 +2155,7 @@ class Dashboard(QScrollArea):
             if not store.is_workflow(pc) and has_data(pc):
                 pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
         if fault and has_data(fault):
-            pies.addWidget(self._pie(tab, rows, st, fault, palette=sub_colors), 0, Qt.AlignTop)
+            pies.addWidget(self._pie(tab, rows, st, fault, subsystem=True), 0, Qt.AlignTop)
         if not pies.count() and not (comp and has_data(comp)):
             lay.addWidget(_small_label("No reasons or subsystems recorded yet"
                                        + (" in the chosen dates." if self._dated(tab) else "."), MUTED))
@@ -2143,7 +2171,7 @@ class Dashboard(QScrollArea):
                 sub, part = store.split_component(value)
                 groups.setdefault(sub, []).append((part or value, counts[value], value))
             tally = charts.ComponentTally()
-            tally.set_data([(sub, sub_colors.get(sub, charts.PENDING), parts) for sub, parts in groups.items()])
+            tally.set_data([(sub, charts.subsystem_color(sub), parts) for sub, parts in groups.items()])
             tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self._go(t, {p: {v}}))
             lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
         return card
@@ -2463,6 +2491,7 @@ class TrackerApp(QMainWindow):
     def _show_data(self, data):
         self.data = data
         charts.set_overrides(store.color_overrides(data.get("settings")))
+        charts.register(data)
         self.setWindowTitle(f"{APP_TITLE} — {data['title']}")
         titles = [t["title"] for t in data["tabs"]]
         for title in list(self.pages):

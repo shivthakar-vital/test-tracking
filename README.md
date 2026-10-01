@@ -128,9 +128,16 @@ Each status gets a colour automatically (see above). To choose your own:
 3. Click a colour next to any status to change it. **Reset** goes back to the built-in colour.
 4. Click **Save for everyone**.
 
-The colours apply to every chart, summary card, and status dot, for everyone using that
-release sheet, after their next sync (within a minute). Statuses are matched by name, so
-*Blocked* gets the same colour on every tab.
+The screen lists everything the charts colour, in sections: **statuses**, **subsystems**
+(the *Subsystem At Fault* pie and the component tally), and the values of each category pie
+(e.g. *Reason for Error Runs*, *Workflow Type*). The colours apply to every chart, summary
+card, status dot, and export, for everyone using that release sheet, after their next sync
+(within a minute). Everything is matched by name, so *Blocked* or *IA* gets the same colour
+on every tab and in the combined export.
+
+Built-in colours: **green is only used for finished statuses** (Done, Completed,
+RUN _COMPLETED, Results, Closed, Won't Do…). Categories and subsystems use a 10-colour
+palette with no greens, chosen so neighbouring colours stay distinct for colourblind readers.
 
 The colours and passcode are saved in a hidden tab of the sheet called
 **Test Tracker Settings**, so a release sheet made with *File → Make a copy* keeps them. The

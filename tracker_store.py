@@ -125,7 +125,9 @@ def check_passcode(passcode, stored):
     return hmac.compare_digest(got.hex(), want)
 
 def color_overrides(settings):
-    """{status value (lower case): "#RRGGBB"} chosen by the admin."""
+    """{key: "#RRGGBB"} chosen by the admin. Keys are a status value ("blocked"),
+    a subsystem ("subsystem:ia"), or a column and value ("workflow type:cc12n dry"),
+    all lower case."""
     return {k[len(COLOR_PREFIX):]: v for k, v in (settings or {}).items()
             if k.startswith(COLOR_PREFIX) and re.fullmatch(r"#[0-9A-Fa-f]{6}", v)}
 
