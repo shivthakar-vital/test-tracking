@@ -382,6 +382,8 @@ def _default_on(tab, rows, col, purpose):
         return True
     if col in (fault_column(tab), component_column(tab)):
         return purpose == "filter"                 # charted in the Error Analysis card instead
+    if col in (created_date_column(tab), done_date_column(tab)) or "date" in _words(col["name"]):
+        return False                               # dates aren't categories (the bug summary uses them)
     if purpose == "chart" and wants_pie(col):
         return False                               # it gets a pie instead of a bar chart
     if col in status_columns(tab) or col["kind"] in ("date", "number", "checkbox"):

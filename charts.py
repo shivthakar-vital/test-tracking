@@ -20,19 +20,22 @@ INK, INK2, MUTED, GRID = "#1A1A18", "#52514E", "#999996", "#ECEAE6"
 # Status colors: meaning first (done / blocked / in progress…), then a fixed
 # categorical order for anything the keywords don't recognise.
 GOOD, CRITICAL, SERIOUS, WARNING = "#0CA30C", "#D03B3B", "#EC835A", "#FAB219"
-PROGRESS, REVIEW, QA = "#2A78D6", "#4A3AA7", "#E87BA4"
+PROGRESS, REVIEW, QA = "#2A78D6", "#0E8FB3", "#E87BA4"
+BLOCKED = "#6A1B9A"           # deep purple: serious, but red is kept for errors
 PENDING, DEFERRED = "#C9C8C2", "#7A7974"
 # Colors for categories (workflows, reasons, subsystems, unrecognised statuses).
-# No greens: green means finished (Done, Completed, Results…). The order keeps
-# neighbours distinct for normal and red-green colorblind vision (OKLab ΔE ≥ 15
-# between any two, ≥ 8 between neighbours as seen with deuteranopia/protanopia).
-CATEGORICAL = ["#2A78D6", "#EB6834", "#B5478F", "#EDA100", "#0E8FB3", "#9C5B2E", "#4A3AA7", "#E87BA4",
-               "#2C3E50", "#39D4E5"]
+# Reserved for statuses and never used here: green (finished), red (errors) and
+# the Blocked purple. Neighbours stay distinct for normal and red-green
+# colorblind vision (OKLab ΔE ≥ 23 as seen with deuteranopia/protanopia); every
+# color is ≥ 15 from error red and from green.
+CATEGORICAL = ["#2A78D6", "#39D4E5", "#1C5672", "#8C9EFF", "#F28E2B", "#C77DD8", "#5D4037", "#E87BA4",
+               "#1F3A68", "#C8A27C"]
 
 # (keywords, class, color) — checked in order, so "no results" wins over "results"
 _RULES = [
     (("won't", "wont"),                                             "done",     GOOD),      # Won't Do / Won't Fix: closed
-    (("block", "error", "fail", "broken"),                          "blocked",  CRITICAL),
+    (("error", "fail", "broken"),                                   "blocked",  CRITICAL),  # red: errors only
+    (("block",),                                                    "blocked",  BLOCKED),
     (("cancel", "abort"),                                          "cancelled", SERIOUS),
     (("no result", "warn", "partial", "flaky"),                     "warning",  WARNING),
     (("defer", "next release", "descoped"),                         "deferred", DEFERRED),

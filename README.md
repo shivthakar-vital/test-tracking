@@ -96,8 +96,8 @@ every time it syncs:
   colours match between the pie and the tally, and blanks are left out. Click anything
   to see those runs.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
-- Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results* are green, *In Progress*
-  blue, *Blocked / Error* red, *Cancelled* orange, *No results* yellow, *Not Started /
+- Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
+  blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /
   Created* gray, and *Deferred* dark gray.
 - Tabs whose name contains **"Automated"** (filled in from Jira) are read-only in the app.
 
@@ -135,9 +135,11 @@ card, status dot, and export, for everyone using that release sheet, after their
 (within a minute). Everything is matched by name, so *Blocked* or *IA* gets the same colour
 on every tab and in the combined export.
 
-Built-in colours: **green is only used for finished statuses** (Done, Completed,
-RUN _COMPLETED, Results, Closed, Won't Do…). Categories and subsystems use a 10-colour
-palette with no greens, chosen so neighbouring colours stay distinct for colourblind readers.
+Built-in colours: **green is only for finished statuses** (Done, Completed, RUN _COMPLETED,
+Results, Closed, Won't Do…), **red is only for errors** (Error, Failed), **Blocked is dark
+purple**, **Cancelled is orange**, and *In Review* is cyan. Categories and subsystems use a
+10-colour palette with no green, red, or Blocked purple, ordered so neighbouring colours stay
+distinct for colourblind readers.
 
 The colours and passcode are saved in a hidden tab of the sheet called
 **Test Tracker Settings**, so a release sheet made with *File → Make a copy* keeps them. The
