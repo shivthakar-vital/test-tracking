@@ -236,8 +236,83 @@ def resolved_column(tab):
 
 FAILED = ("blocked", "cancelled", "warning")      # status classes that count as a failed run
 
+
+# ── repeated issues ("Continued from Run#") ───────────────────────────────────
+# A run can say it continues the error from an earlier run. The whole chain is one
+# issue: counted once in the error analysis, resolved only when every run in it is.
+
+def continued_column(tab):
+    """e.g. "Continued from Run#" / "Continued Error From Run Number"."""
+    return next((c for c in tab["columns"]
+                 if _words(c["name"]) & {"continued", "continues", "continuation"}), None)
+
+def _run_key(tab, row):
+    v = row["values"][tab["columns"][0]["pos"]].strip()
+    return v.lstrip("#").strip()
+
+def issue_groups(tab, rows=None):
+    """{root run key: [rows in that chain, oldest first]} for the tab's runs. Runs that
+    don't continue another one are their own issue. Self-references and unknown run
+    numbers are ignored, so a typo never hides a run."""
+    rows = [r for r in (rows if rows is not None else tab["rows"]) if not is_blank(r)]
+    cont, dcol = continued_column(tab), date_column(tab)
+    by_key = {_run_key(tab, r): r for r in rows}
+    parent = {}
+    if cont:
+        for r in rows:
+            key = _run_key(tab, r)
+            ref = re.sub(r"(?i)^(run\s*)?#?\s*", "", r["values"][cont["pos"]].strip())
+            if ref and ref != key and ref in by_key:
+                parent[key] = ref
+
+    def root(key):
+        seen = set()
+        while key in parent and key not in seen:
+            seen.add(key)
+            key = parent[key]
+        return key
+
+    groups = {}
+    for r in rows:
+        groups.setdefault(root(_run_key(tab, r)), []).append(r)
+    when = lambda r: (parse_date(r["values"][dcol["pos"]]) if dcol else None) or date.min
+    return {k: sorted(v, key=when) for k, v in groups.items()}
+
+def merge_issue(tab, rows):
+    """One row standing for a chain of runs: each cell from the first run that has it
+    filled in. "_runs" lists every run in the chain (for opening them in the table)."""
+    merged = dict(rows[0], values=list(rows[0]["values"]), links=list(rows[0]["links"]))
+    for c in tab["columns"]:
+        if not merged["values"][c["pos"]].strip():
+            for r in rows[1:]:
+                if r["values"][c["pos"]].strip():
+                    merged["values"][c["pos"]] = r["values"][c["pos"]]
+                    merged["links"][c["pos"]] = r["links"][c["pos"]]
+                    break
+    merged["_runs"] = rows
+    return merged
+
+def issues(tab, rows):
+    """`rows` (e.g. the runs in a date range) with each repeated issue counted once:
+    one merged row per chain that has a run in `rows`. Without a "Continued from"
+    column, it's just `rows`."""
+    if not continued_column(tab):
+        return rows
+    groups = issue_groups(tab)
+    root_of = {id(r): k for k, chain in groups.items() for r in chain}
+    seen, out = set(), []
+    for r in rows:
+        k = root_of.get(id(r))
+        if k is None:
+            out.append(r)
+        elif k not in seen:
+            seen.add(k)
+            out.append(merge_issue(tab, groups[k]) if len(groups[k]) > 1 else r)
+    return out
+
 def resolutions(tab, rows, rng=None):
-    """For each failed run: (row, resolved date or None, days it took or None, run date or None,
+    """For each failed issue (a run, or a chain of continued runs counted once):
+    (row, resolved date or None, days it took or None, first run date or None,
     subsystem at fault, component, carried over) — subsystem/component are "" when not filled in.
     Days = the Resolved date minus the run's date (0 = fixed the same day).
 
@@ -251,11 +326,14 @@ def resolutions(tab, rows, rng=None):
     out = []
     if res is None:
         return out
-    for r in rows:
-        if charts.classify(row_status(tab, r)) not in FAILED:
+    for chain in issue_groups(tab, rows).values():
+        failed = [r for r in chain if charts.classify(row_status(tab, r)) in FAILED]
+        if not failed:
             continue
-        ran = parse_date(r["values"][dcol["pos"]]) if dcol else None
-        fixed = parse_date(r["values"][res["pos"]])
+        r = merge_issue(tab, chain) if len(chain) > 1 else chain[0]
+        ran = parse_date(chain[0]["values"][dcol["pos"]]) if dcol else None    # first run of the issue
+        fixes = [parse_date(x["values"][res["pos"]]) for x in failed]
+        fixed = max(fixes) if all(fixes) else None           # resolved once every run in it is
         carried = False
         if rng is not None:
             first, last = rng
@@ -426,6 +504,8 @@ def _default_on(tab, rows, col, purpose):
         return True
     if col in (fault_column(tab), component_column(tab)):
         return purpose == "filter"                 # charted in the Error Analysis card instead
+    if col is continued_column(tab):
+        return False                               # a reference to another run, not a category
     if col in (created_date_column(tab), done_date_column(tab), resolved_column(tab)) \
             or "date" in _words(col["name"]):
         return False                               # dates aren't categories (the bug summary uses them)

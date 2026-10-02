@@ -105,6 +105,13 @@ every time it syncs:
   end-of-day summary: failed runs from earlier days that are **still open** stay listed until
   they're resolved, and runs **resolved during** the range count as resolved even if they ran
   earlier. Days are the *Resolved?* date minus the run's date.
+- **Repeated issues:** when a run tracker has a *Continued from Run#* column, a run that
+  continues the error from an earlier run is part of the **same issue**. Error Analysis (the
+  reason and subsystem pies, the component tally, resolved/unresolved, days to resolve, and the
+  subsystem lists) counts each issue once. An issue is resolved when every run in it is, and
+  days to resolve count from its first run. Run-based charts (run status, Coder vs Atlantis,
+  runs per software version, per day) and the run list still show every run; the export's run
+  list has a **Continues** column.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
   blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /

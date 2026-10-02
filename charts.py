@@ -565,7 +565,7 @@ def resolution_charts(entries, today=None):
         groups.pop()
     bars = StackedBars()
     bars.set_data(groups)
-    bits = [f"{len(done)} of {len(entries)} failed runs resolved"]
+    bits = [f"{len(done)} of {len(entries)} issue{'s' if len(entries) != 1 else ''} resolved"]
     earlier = lambda group: sum(1 for e in group if len(e) > 6 and e[6])   # carried over from before the range
     if earlier(done):
         bits[0] += f" ({earlier(done)} of them from earlier days)"

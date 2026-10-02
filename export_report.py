@@ -110,11 +110,11 @@ class Snapshot:
                    blank=store.blank_label(col))
         return self._image(b, width)
 
-    def _category_pie(self, rows, col):
+    def _category_pie(self, rows, col, unit="issue"):
         counts = Counter(p.strip() for r in rows for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
-        return self._counts_pie(counts, col["options"], col["name"])
+        return self._counts_pie(counts, col["options"], col["name"], unit=unit)
 
-    def _counts_pie(self, counts, options, column, subsystem=False):
+    def _counts_pie(self, counts, options, column, subsystem=False, unit="issue"):
         """A donut of category counts, in the app's shared colors for that column
         (or for subsystems), so they match the dashboard."""
         base = charts.SUBSYSTEM_ORDER if subsystem else options
@@ -122,7 +122,7 @@ class Snapshot:
         palette = {v: charts.subsystem_color(v) if subsystem else charts.category_color(column, v)
                    for v in options}
         total = sum(counts.values())
-        return self._donut(counts, palette, options, (str(total), "run" if total == 1 else "runs"))
+        return self._donut(counts, palette, options, (str(total), unit if total == 1 else unit + "s"))
 
     # ── page ──────────────────────────────────────────────────────────────────
 
@@ -197,7 +197,7 @@ class Snapshot:
         donut, status, colors, order = self._status_donut(tab, rows)
         cells = [f'<td valign="top" width="400">{self._label(status["name"] if status else "Status")}{donut}</td>']
         for wf in [c for c in store.pie_columns(tab, rows, self.settings) if store.is_workflow(c)]:
-            cells.append(f'<td valign="top">{self._label(wf["name"])}{self._category_pie(rows, wf)}</td>')
+            cells.append(f'<td valign="top">{self._label(wf["name"])}{self._category_pie(rows, wf, unit="run")}</td>')
         out.append(f'<table cellspacing="0" cellpadding="4"><tr>{"".join(cells)}</tr></table>')
 
         bars = []
@@ -222,8 +222,11 @@ class Snapshot:
         workflow = next((c for c in pies if store.is_workflow(c)), None)
         reason = next((c for c in pies if not store.is_workflow(c)), None)
         fault = store.fault_column(tab)
-        extra = [c for c in (workflow, reason, fault) if c]
-        head = ["Date", "Run"] + (["Ran on"] if plat else []) + ["Status"] + [c["name"] for c in extra]
+        cont = store.continued_column(tab)
+        cont = cont if cont and any(r["values"][cont["pos"]].strip() for r in rows) else None
+        extra = [c for c in (workflow, reason, fault, cont) if c]
+        head = ["Date", "Run"] + (["Ran on"] if plat else []) + ["Status"] + \
+               ["Continues" if c is cont else c["name"] for c in extra]
         lines = [f'<p style="margin-top:8px; margin-bottom:2px">{self._label("Runs")}</p>',
                  '<table width="100%" cellspacing="0" cellpadding="5" style="border-collapse:collapse">',
                  "<tr>" + "".join(f"<th>{esc(h)}</th>" for h in head) + "</tr>"]
@@ -238,7 +241,8 @@ class Snapshot:
             if plat:
                 vals.append(esc(store.row_platform(tab, r)))
             vals.append(dot + esc(st or "—"))
-            vals += [esc(r["values"][c["pos"]] or "—") for c in extra]
+            vals += [esc((f"#{r['values'][c['pos']].lstrip('#')}" if c is cont else r["values"][c["pos"]])
+                         if r["values"][c["pos"]].strip() else "—") for c in extra]
             bg = ' bgcolor="#F7F7F5"' if i % 2 else ""
             lines.append(f"<tr{bg}>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>")
         lines.append("</table>")
@@ -252,11 +256,16 @@ class Snapshot:
         """Why runs failed, summed across the given run trackers: one pie per reason
         column (matched by name), a Subsystem At Fault pie, and a tally of the
         components that had runs. Dropdown options from every tab are combined."""
-        per_tab = [(t, _in_range(t, self.rng)) for t in tabs]
-        failed = {t["title"]: sum(charts.classify(store.row_status(t, r)) in ("blocked", "cancelled", "warning")
-                                  for r in rows) for t, rows in per_tab}
+        # a chain of continued runs ("Continued from Run#") is one issue, counted once
+        per_tab = [(t, store.issues(t, _in_range(t, self.rng))) for t in tabs]
+        is_failed = lambda t, r: charts.classify(store.row_status(t, r)) in store.FAILED
+        failed = {t["title"]: sum(is_failed(t, r) for r in rows) for t, rows in per_tab}
+        runs = sum(is_failed(t, r) for t in tabs for r in _in_range(t, self.rng))
         total_failed = sum(failed.values())
         note = f"{_plural(total_failed, 'failed run')} in {esc(self.range_text)}"
+        if runs > total_failed:
+            note = (f"{_plural(total_failed, 'issue')} from {runs} failed runs in {esc(self.range_text)} "
+                    f"(repeats counted once)")
         if len(tabs) > 1:
             note += ": " + " · ".join(f"{esc(k.replace(' End-to-End Tracker', ''))} {v}" for k, v in failed.items())
         out = [f'<p style="color:{MUTED}; margin-bottom:4px">{note} · blank cells are left out</p>']

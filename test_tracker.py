@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.5"         # bump this for each release, then push a matching tag (v1.1.5)
+APP_VERSION = "1.1.6"         # bump this for each release, then push a matching tag (v1.1.6)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1794,7 +1794,8 @@ class Dashboard(QScrollArea):
         """Open a tab's table showing exactly these rows (by their first column, e.g. the
         run number), whatever their dates — e.g. open issues carried over from earlier days."""
         key = tab["columns"][0]
-        self._go(tab["title"], {key["pos"]: {r["values"][key["pos"]] for r in rows} or {"\0"}}, dates=False)
+        runs = [x for r in rows for x in r.get("_runs", [r])]       # a repeated issue opens all its runs
+        self._go(tab["title"], {key["pos"]: {r["values"][key["pos"]] for r in runs} or {"\0"}}, dates=False)
 
     def _go(self, title, filters=None, dates=True):
         """Open a tab's table, filtered like the chart that was clicked — including the dates
@@ -1939,8 +1940,10 @@ class Dashboard(QScrollArea):
 
         has_data = lambda c: any(r["values"][c["pos"]].strip() for r in rows)
         pies = [c for c in store.pie_columns(tab, rows, _settings(self.win)) if has_data(c)]
+        issue_rows = store.issues(tab, rows)       # reasons count each repeated issue once
         for pc in pies:
-            charts_row.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
+            charts_row.addWidget(self._pie(tab, rows if store.is_workflow(pc) else issue_rows, st, pc),
+                                 0, Qt.AlignTop)
         bars_row = charts_row
         if pies:                                  # donuts on top, bar charts get their own row
             charts_row.addStretch(1)
@@ -2121,15 +2124,17 @@ class Dashboard(QScrollArea):
                    for v in options}
         pie = charts.DonutChart()
         total = sum(counts.values())
+        unit = "run" if store.is_workflow(col) else "issue"       # reasons/subsystems count issues
         pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
-                     (str(total), "run" if total == 1 else "runs"))
+                     (str(total), unit if total == 1 else unit + "s"))
         pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self._go(t, {p: {v}}))
         return self._titled(col["name"], pie)
 
     def _analysis(self, tab):
         """Error Analysis card: why runs failed, which subsystem, and a tally of
         every component (from the dropdown's options) grouped by subsystem."""
-        rows = self._rows(tab)
+        runs = self._rows(tab)
+        rows = store.issues(tab, runs)            # a chain of continued runs counts once
         st = {id(r): store.row_status(tab, r) for r in rows}
         fault, comp = store.fault_column(tab), store.component_column(tab)
 
@@ -2143,8 +2148,12 @@ class Dashboard(QScrollArea):
         t = QLabel(f"{tab['title']} — Error Analysis")
         t.setStyleSheet("font-size:15px; font-weight:bold;")
         head.addWidget(t)
-        failed = sum(charts.classify(v) in ("blocked", "cancelled", "warning") for v in st.values())
+        failed = sum(charts.classify(v) in store.FAILED for v in st.values())
+        failed_runs = sum(charts.classify(store.row_status(tab, r)) in store.FAILED for r in runs)
         note = f"{failed} failed run{'s' if failed != 1 else ''}"
+        if failed_runs > failed:
+            note = (f"{failed} issue{'s' if failed != 1 else ''} from {failed_runs} failed runs "
+                    f"(repeats counted once)")
         if self._dated(tab):
             note += " · " + self.range_text
         head.addWidget(_small_label(note + " · blanks are left out", MUTED), 0, Qt.AlignBottom)
