@@ -99,8 +99,9 @@ every time it syncs:
   the export) shows **Resolved Issues from Failed Runs** (resolved vs not yet), a **Days to
   resolve** tally (same day, 1 day, 2 days, 3–6 days, 1–2 weeks, 2+ weeks), a summary (how
   many are resolved, the average and longest time, and how long the oldest open one has
-  waited), and **Resolved, by subsystem**: the resolved runs grouped by subsystem and
-  component. Days are the *Resolved?* date minus the run's date.
+  waited), and **Resolved, by subsystem** and **Unresolved, by subsystem**: the failed runs
+  grouped by subsystem and component (runs with no component recorded are left out, as they're
+  likely not a specific hardware issue). Days are the *Resolved?* date minus the run's date.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
   blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /

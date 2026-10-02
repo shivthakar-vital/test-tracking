@@ -319,10 +319,11 @@ class Snapshot:
                        f'<td valign="top">{self._label("Days to resolve (run date → Resolved date)")}'
                        f'{self._image(days, 520)}<br><span style="font-size:12px">{esc(summary)}</span></td>'
                        f'</tr></table>')
-            by_sub = charts.resolved_by_subsystem(fixes)
-            if by_sub is not None:
-                out.append(f'<p style="margin-top:6px">{self._label("Resolved, by subsystem")}'
-                           f'{self._image(by_sub, WIDTH - 40)}</p>')
+            for resolved, title in ((True, "Resolved, by subsystem"), (False, "Unresolved, by subsystem")):
+                by_sub = charts.resolved_by_subsystem(fixes, resolved)
+                if by_sub is not None:
+                    out.append(f'<p style="margin-top:6px">{self._label(title)}'
+                               f'{self._image(by_sub, WIDTH - 40)}</p>')
         return "".join(out)
 
     def _bugs_section(self, tab):

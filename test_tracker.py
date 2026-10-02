@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.3"         # bump this for each release, then push a matching tag (v1.1.3)
+APP_VERSION = "1.1.4"         # bump this for each release, then push a matching tag (v1.1.4)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -2195,19 +2195,24 @@ class Dashboard(QScrollArea):
             right.addStretch(1)
             row.addLayout(right, 1)
             lay.addLayout(row)
-            by_sub = charts.resolved_by_subsystem(fixes)
-            if by_sub is not None:
-                fault = store.fault_column(tab)
-                def open_resolved(payload, t=tab["title"], f=fixes, res=res, comp=comp, fault=fault):
+            fault = store.fault_column(tab)
+            lists = _FlowColumns()
+            for resolved, title in ((True, "Resolved, by subsystem"), (False, "Unresolved, by subsystem")):
+                by_sub = charts.resolved_by_subsystem(fixes, resolved)
+                if by_sub is None:
+                    continue
+                def open_runs(payload, t=tab["title"], f=fixes, res=res, comp=comp, resolved=resolved):
                     sub, part = payload
-                    hits = [r for r, fixed, _, _, s_, p_ in f if fixed is not None and (s_ or charts.NOT_RECORDED) == sub
-                            and p_ == part]
+                    hits = [r for r, fixed, _, _, s_, p_ in f if (fixed is not None) == resolved
+                            and (s_ or charts.NOT_RECORDED) == sub and p_ == part]
                     filters = {res["pos"]: {r["values"][res["pos"]] for r in hits} or {"\0"}}
                     if comp:
                         filters[comp["pos"]] = {part}
                     self._go(t, filters)
-                by_sub.picked.connect(open_resolved)
-                lay.addWidget(self._titled("Resolved, by subsystem", by_sub))
+                by_sub.picked.connect(open_runs)
+                lists.add(self._titled(title, by_sub))
+            if lists.items:
+                lay.addWidget(lists)
         return card
 
     @staticmethod
