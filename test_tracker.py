@@ -2184,7 +2184,7 @@ class Dashboard(QScrollArea):
                                                   if (fixed is not None) == (v == "Resolved")} or {"\0"}}))
             row = QHBoxLayout()
             row.setSpacing(28)
-            row.addWidget(self._titled("Resolved? (failed runs)", donut), 0, Qt.AlignTop)
+            row.addWidget(self._titled("Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
             right = QVBoxLayout()
             right.setSpacing(6)
             right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
@@ -2195,6 +2195,19 @@ class Dashboard(QScrollArea):
             right.addStretch(1)
             row.addLayout(right, 1)
             lay.addLayout(row)
+            by_sub = charts.resolved_by_subsystem(fixes)
+            if by_sub is not None:
+                fault = store.fault_column(tab)
+                def open_resolved(payload, t=tab["title"], f=fixes, res=res, comp=comp, fault=fault):
+                    sub, part = payload
+                    hits = [r for r, fixed, _, _, s_, p_ in f if fixed is not None and (s_ or charts.NOT_RECORDED) == sub
+                            and p_ == part]
+                    filters = {res["pos"]: {r["values"][res["pos"]] for r in hits} or {"\0"}}
+                    if comp:
+                        filters[comp["pos"]] = {part}
+                    self._go(t, filters)
+                by_sub.picked.connect(open_resolved)
+                lay.addWidget(self._titled("Resolved, by subsystem", by_sub))
         return card
 
     @staticmethod

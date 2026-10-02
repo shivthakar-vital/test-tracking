@@ -9,6 +9,7 @@ app uses to jump to the matching rows in the table.
 """
 
 import math
+from collections import Counter
 
 from PyQt5.QtWidgets import QWidget, QToolTip, QSizePolicy
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QSize
@@ -573,3 +574,25 @@ def resolution_charts(entries, today=None):
         oldest = max(waiting)
         bits.append(f"{len(open_)} still open, oldest {oldest} day{'s' if oldest != 1 else ''}")
     return donut, bars, " · ".join(bits)
+
+
+NOT_RECORDED = "Not recorded"
+
+def resolved_by_subsystem(entries):
+    """A tally of the resolved failed runs, grouped by subsystem with their components
+    (same look and colors as the component tally). Payload: (subsystem, component)."""
+    import tracker_store as store
+    done = [e for e in entries if e[1] is not None]
+    if not done:
+        return None
+    groups = {}
+    for e in done:
+        sub, part = e[4] or NOT_RECORDED, e[5]
+        label = store.split_component(part)[1] or part if part else "Component not recorded"
+        groups.setdefault(sub, Counter())[(label, part)] += 1
+    order = [s_ for s_ in SUBSYSTEM_ORDER if s_ in groups] + sorted(k for k in groups if k not in SUBSYSTEM_ORDER)
+    tally = ComponentTally()
+    tally.set_data([(sub, PENDING if sub == NOT_RECORDED else subsystem_color(sub),
+                     [(label, n, (sub, part)) for (label, part), n in groups[sub].most_common()])
+                    for sub in order])
+    return tally

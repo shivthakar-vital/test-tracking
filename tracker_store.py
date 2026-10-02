@@ -237,10 +237,12 @@ def resolved_column(tab):
 FAILED = ("blocked", "cancelled", "warning")      # status classes that count as a failed run
 
 def resolutions(tab, rows):
-    """For each failed run: (row, resolved date or None, days it took or None, run date or None).
+    """For each failed run: (row, resolved date or None, days it took or None, run date or None,
+    subsystem at fault, component) — the last two are "" when not filled in.
     Days = the Resolved date minus the run's date (0 = fixed the same day)."""
     import charts
     res, dcol = resolved_column(tab), date_column(tab)
+    fault, comp = fault_column(tab), component_column(tab)
     out = []
     if res is None:
         return out
@@ -250,7 +252,9 @@ def resolutions(tab, rows):
         ran = parse_date(r["values"][dcol["pos"]]) if dcol else None
         fixed = parse_date(r["values"][res["pos"]])
         days = (fixed - ran).days if fixed and ran and fixed >= ran else None
-        out.append((r, fixed, days, ran))
+        part = r["values"][comp["pos"]].strip() if comp else ""
+        sub = (r["values"][fault["pos"]].strip() if fault else "") or (split_component(part)[0] if part else "")
+        out.append((r, fixed, days, ran, sub, part))
     return out
 
 def is_bug_tab(tab):

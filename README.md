@@ -96,10 +96,11 @@ every time it syncs:
   colours match between the pie and the tally, and blanks are left out. Click anything
   to see those runs.
 - **Resolved runs:** on trackers with a *Resolved?* date column, the Error Analysis card (and
-  the export) shows a **Resolved?** pie for failed runs (resolved vs not yet), a **Days to
-  resolve** tally (same day, 1 day, 2 days, 3–6 days, 1–2 weeks, 2+ weeks), and a summary:
-  how many are resolved, the average and longest time, and how long the oldest open one has
-  waited. Days are the *Resolved?* date minus the run's date.
+  the export) shows **Resolved Issues from Failed Runs** (resolved vs not yet), a **Days to
+  resolve** tally (same day, 1 day, 2 days, 3–6 days, 1–2 weeks, 2+ weeks), a summary (how
+  many are resolved, the average and longest time, and how long the oldest open one has
+  waited), and **Resolved, by subsystem**: the resolved runs grouped by subsystem and
+  component. Days are the *Resolved?* date minus the run's date.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
   blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /
