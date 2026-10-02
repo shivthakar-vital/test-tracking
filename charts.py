@@ -582,7 +582,8 @@ def resolved_by_subsystem(entries):
     """A tally of the resolved failed runs, grouped by subsystem with their components
     (same look and colors as the component tally). Payload: (subsystem, component)."""
     import tracker_store as store
-    done = [e for e in entries if e[1] is not None]
+    # runs with no component recorded were likely not a specific hardware issue: left out
+    done = [e for e in entries if e[1] is not None and e[5]]
     if not done:
         return None
     groups = {}
