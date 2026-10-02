@@ -321,7 +321,7 @@ class Snapshot:
                        f'</tr></table>')
             by_sub = charts.resolved_by_subsystem(fixes)
             if by_sub is not None:
-                out.append(f'<p style="margin-top:6px">{self._label("Resolved, by subsystem")}'
+                out.append(f'<p style="margin-top:6px">{self._label("Resolved Hardware Related Issues on Failed Runs")}'
                            f'{self._image(by_sub, WIDTH - 40)}</p>')
         return "".join(out)
 

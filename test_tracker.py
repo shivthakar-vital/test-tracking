@@ -2207,7 +2207,7 @@ class Dashboard(QScrollArea):
                         filters[comp["pos"]] = {part}
                     self._go(t, filters)
                 by_sub.picked.connect(open_resolved)
-                lay.addWidget(self._titled("Resolved, by subsystem", by_sub))
+                lay.addWidget(self._titled("Resolved Hardware Related Issues on Failed Runs", by_sub))
         return card
 
     @staticmethod
