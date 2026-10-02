@@ -222,11 +222,8 @@ class Snapshot:
         workflow = next((c for c in pies if store.is_workflow(c)), None)
         reason = next((c for c in pies if not store.is_workflow(c)), None)
         fault = store.fault_column(tab)
-        cont = store.continued_column(tab)
-        cont = cont if cont and any(r["values"][cont["pos"]].strip() for r in rows) else None
-        extra = [c for c in (workflow, reason, fault, cont) if c]
-        head = ["Date", "Run"] + (["Ran on"] if plat else []) + ["Status"] + \
-               ["Continues" if c is cont else c["name"] for c in extra]
+        extra = [c for c in (workflow, reason, fault) if c]
+        head = ["Date", "Run"] + (["Ran on"] if plat else []) + ["Status"] + [c["name"] for c in extra]
         lines = [f'<p style="margin-top:8px; margin-bottom:2px">{self._label("Runs")}</p>',
                  '<table width="100%" cellspacing="0" cellpadding="5" style="border-collapse:collapse">',
                  "<tr>" + "".join(f"<th>{esc(h)}</th>" for h in head) + "</tr>"]
@@ -241,8 +238,7 @@ class Snapshot:
             if plat:
                 vals.append(esc(store.row_platform(tab, r)))
             vals.append(dot + esc(st or "—"))
-            vals += [esc((f"#{r['values'][c['pos']].lstrip('#')}" if c is cont else r["values"][c["pos"]])
-                         if r["values"][c["pos"]].strip() else "—") for c in extra]
+            vals += [esc(r["values"][c["pos"]] or "—") for c in extra]
             bg = ' bgcolor="#F7F7F5"' if i % 2 else ""
             lines.append(f"<tr{bg}>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>")
         lines.append("</table>")
