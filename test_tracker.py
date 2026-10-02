@@ -2156,7 +2156,8 @@ class Dashboard(QScrollArea):
                 pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
         if fault and has_data(fault):
             pies.addWidget(self._pie(tab, rows, st, fault, subsystem=True), 0, Qt.AlignTop)
-        if not pies.count() and not (comp and has_data(comp)):
+        fixes = store.resolutions(tab, rows)
+        if not pies.count() and not (comp and has_data(comp)) and not fixes:
             lay.addWidget(_small_label("No reasons or subsystems recorded yet"
                                        + (" in the chosen dates." if self._dated(tab) else "."), MUTED))
             return card
@@ -2174,6 +2175,26 @@ class Dashboard(QScrollArea):
             tally.set_data([(sub, charts.subsystem_color(sub), parts) for sub, parts in groups.items()])
             tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self._go(t, {p: {v}}))
             lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
+        made = charts.resolution_charts(fixes)
+        if made:
+            donut, days, summary = made
+            res = store.resolved_column(tab)
+            donut.picked.connect(lambda v, t=tab["title"], p=res["pos"], f=fixes:
+                                 self._go(t, {p: {r["values"][p] for r, fixed, *_ in f
+                                                  if (fixed is not None) == (v == "Resolved")} or {"\0"}}))
+            row = QHBoxLayout()
+            row.setSpacing(28)
+            row.addWidget(self._titled("Resolved? (failed runs)", donut), 0, Qt.AlignTop)
+            right = QVBoxLayout()
+            right.setSpacing(6)
+            right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
+            note = QLabel(summary)
+            note.setStyleSheet("font-size:12px; color:#1A1A18;")
+            note.setWordWrap(True)
+            right.addWidget(note)
+            right.addStretch(1)
+            row.addLayout(right, 1)
+            lay.addLayout(row)
         return card
 
     @staticmethod

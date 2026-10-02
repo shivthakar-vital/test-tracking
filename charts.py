@@ -538,3 +538,38 @@ def tab_colors(tab, rows=None):
     values = {store.row_status(tab, r) for r in rows}
     values |= {r["values"][c["pos"]].strip() for c in store.status_columns(tab) for r in rows}
     return col, status_colors(values, col["options"])
+
+
+DAY_BUCKETS = [("Same day", 0, 0), ("1 day", 1, 1), ("2 days", 2, 2), ("3–6 days", 3, 6),
+               ("1–2 weeks", 7, 13), ("2+ weeks", 14, 10 ** 6)]
+
+def resolution_charts(entries, today=None):
+    """Charts for how failed runs were resolved, shared by the dashboard and the export.
+    entries: [(row, resolved date, days, run date)] from tracker_store.resolutions().
+    Returns (donut, days bars, one-line summary) or None when there are no failed runs."""
+    from datetime import date as _date
+    if not entries:
+        return None
+    today = today or _date.today()
+    done = [e for e in entries if e[1] is not None]
+    open_ = [e for e in entries if e[1] is None]
+    donut = DonutChart()
+    donut.set_data([("Resolved", len(done), GOOD), ("Not resolved yet", len(open_), PENDING)],
+                   (f"{round(100 * len(done) / len(entries))}%", "resolved"))
+    days = [e[2] for e in done if e[2] is not None]
+    groups = [(label, [("Resolved", sum(lo <= d <= hi for d in days), GOOD)])
+              for label, lo, hi in DAY_BUCKETS]
+    while len(groups) > 1 and not groups[-1][1][0][1]:      # trim empty buckets off the end
+        groups.pop()
+    bars = StackedBars()
+    bars.set_data(groups)
+    bits = [f"{len(done)} of {len(entries)} failed runs resolved"]
+    if days:
+        avg = sum(days) / len(days)
+        bits.append(f"average {avg:.1f} day{'s' if round(avg, 1) != 1 else ''} to resolve")
+        bits.append(f"longest {max(days)} day{'s' if max(days) != 1 else ''}")
+    waiting = [(today - e[3]).days for e in open_ if e[3]]
+    if waiting:
+        oldest = max(waiting)
+        bits.append(f"{len(open_)} still open, oldest {oldest} day{'s' if oldest != 1 else ''}")
+    return donut, bars, " · ".join(bits)

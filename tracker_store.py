@@ -229,6 +229,30 @@ def created_date_column(tab):
             return c
     return None
 
+def resolved_column(tab):
+    """e.g. "Resolved?" on a run tracker: the date a failed run's problem was fixed."""
+    return next((c for c in tab["columns"] if c not in status_columns(tab)
+                 and _words(c["name"]) & {"resolved", "resolution", "fixed"}), None)
+
+FAILED = ("blocked", "cancelled", "warning")      # status classes that count as a failed run
+
+def resolutions(tab, rows):
+    """For each failed run: (row, resolved date or None, days it took or None, run date or None).
+    Days = the Resolved date minus the run's date (0 = fixed the same day)."""
+    import charts
+    res, dcol = resolved_column(tab), date_column(tab)
+    out = []
+    if res is None:
+        return out
+    for r in rows:
+        if charts.classify(row_status(tab, r)) not in FAILED:
+            continue
+        ran = parse_date(r["values"][dcol["pos"]]) if dcol else None
+        fixed = parse_date(r["values"][res["pos"]])
+        days = (fixed - ran).days if fixed and ran and fixed >= ran else None
+        out.append((r, fixed, days, ran))
+    return out
+
 def is_bug_tab(tab):
     return bool(done_date_column(tab) or created_date_column(tab)) and "bug" in tab["title"].lower()
 
@@ -382,7 +406,8 @@ def _default_on(tab, rows, col, purpose):
         return True
     if col in (fault_column(tab), component_column(tab)):
         return purpose == "filter"                 # charted in the Error Analysis card instead
-    if col in (created_date_column(tab), done_date_column(tab)) or "date" in _words(col["name"]):
+    if col in (created_date_column(tab), done_date_column(tab), resolved_column(tab)) \
+            or "date" in _words(col["name"]):
         return False                               # dates aren't categories (the bug summary uses them)
     if purpose == "chart" and wants_pie(col):
         return False                               # it gets a pie instead of a bar chart

@@ -290,7 +290,8 @@ class Snapshot:
         f_name, f_counts, f_opts = combine(lambda t, rows: store.fault_column(t))
         if f_counts:
             cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, f_name, subsystem=True)}</td>')
-        if not cells and not comp_counts:
+        fixes = [e for t, rows in per_tab for e in store.resolutions(t, rows)]
+        if not cells and not comp_counts and not fixes:
             out.append(f'<p style="color:{MUTED}">No reasons or subsystems recorded in this date range.</p>')
             return "".join(out)
         if cells:
@@ -309,6 +310,14 @@ class Snapshot:
             else:
                 out.append(f'<p style="margin-top:6px">{label}<span style="color:{MUTED}">'
                            f'No components recorded in this date range.</span></p>')
+        made = charts.resolution_charts(fixes)
+        if made:
+            donut, days, summary = made
+            out.append(f'<table cellspacing="0" cellpadding="4" style="margin-top:8px"><tr>'
+                       f'<td valign="top" width="400">{self._label("Resolved? (failed runs)")}{self._image(donut)}</td>'
+                       f'<td valign="top">{self._label("Days to resolve (run date → Resolved date)")}'
+                       f'{self._image(days, 520)}<br><span style="font-size:12px">{esc(summary)}</span></td>'
+                       f'</tr></table>')
         return "".join(out)
 
     def _bugs_section(self, tab):
