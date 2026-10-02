@@ -101,7 +101,10 @@ every time it syncs:
   many are resolved, the average and longest time, and how long the oldest open one has
   waited), and **Resolved, by subsystem** and **Unresolved, by subsystem**: the failed runs
   grouped by subsystem and component (runs with no component recorded are left out, as they're
-  likely not a specific hardware issue). Days are the *Resolved?* date minus the run's date.
+  likely not a specific hardware issue). With a date filter (e.g. *Today*), these work like an
+  end-of-day summary: failed runs from earlier days that are **still open** stay listed until
+  they're resolved, and runs **resolved during** the range count as resolved even if they ran
+  earlier. Days are the *Resolved?* date minus the run's date.
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
   blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /

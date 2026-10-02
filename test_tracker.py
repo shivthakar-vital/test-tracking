@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.4"         # bump this for each release, then push a matching tag (v1.1.4)
+APP_VERSION = "1.1.5"         # bump this for each release, then push a matching tag (v1.1.5)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1790,11 +1790,18 @@ class Dashboard(QScrollArea):
             text = f"{n} of {total} rows · {self.range_text}"
         return text
 
-    def _go(self, title, filters=None):
-        """Open a tab's table, filtered like the chart that was clicked — including the dates."""
+    def _go_rows(self, tab, rows):
+        """Open a tab's table showing exactly these rows (by their first column, e.g. the
+        run number), whatever their dates — e.g. open issues carried over from earlier days."""
+        key = tab["columns"][0]
+        self._go(tab["title"], {key["pos"]: {r["values"][key["pos"]] for r in rows} or {"\0"}}, dates=False)
+
+    def _go(self, title, filters=None, dates=True):
+        """Open a tab's table, filtered like the chart that was clicked — including the dates
+        (unless dates=False, e.g. for open issues carried over from earlier days)."""
         filters = dict(filters or {})
         tab = next((t for t in self.win.data["tabs"] if t["title"] == title), None)
-        if tab and self._dated(tab):
+        if tab and dates and self._dated(tab):
             dcol = store.date_column(tab)
             if dcol["pos"] not in filters:
                 filters[dcol["pos"]] = {r["values"][dcol["pos"]] for r in self._rows(tab)} or {"\0"}
@@ -2156,7 +2163,8 @@ class Dashboard(QScrollArea):
                 pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
         if fault and has_data(fault):
             pies.addWidget(self._pie(tab, rows, st, fault, subsystem=True), 0, Qt.AlignTop)
-        fixes = store.resolutions(tab, rows)
+        # open issues from earlier days stay visible until they're resolved
+        fixes = store.resolutions(tab, _visible_rows(tab), self.range)
         if not pies.count() and not (comp and has_data(comp)) and not fixes:
             lay.addWidget(_small_label("No reasons or subsystems recorded yet"
                                        + (" in the chosen dates." if self._dated(tab) else "."), MUTED))
@@ -2175,13 +2183,13 @@ class Dashboard(QScrollArea):
             tally.set_data([(sub, charts.subsystem_color(sub), parts) for sub, parts in groups.items()])
             tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self._go(t, {p: {v}}))
             lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
-        made = charts.resolution_charts(fixes)
+        as_of = min(self.range[1], date.today()) if self.range else None
+        made = charts.resolution_charts(fixes, as_of)
         if made:
             donut, days, summary = made
             res = store.resolved_column(tab)
-            donut.picked.connect(lambda v, t=tab["title"], p=res["pos"], f=fixes:
-                                 self._go(t, {p: {r["values"][p] for r, fixed, *_ in f
-                                                  if (fixed is not None) == (v == "Resolved")} or {"\0"}}))
+            donut.picked.connect(lambda v, t=tab, f=fixes:
+                                 self._go_rows(t, [e[0] for e in f if (e[1] is not None) == (v == "Resolved")]))
             row = QHBoxLayout()
             row.setSpacing(28)
             row.addWidget(self._titled("Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
@@ -2201,14 +2209,10 @@ class Dashboard(QScrollArea):
                 by_sub = charts.resolved_by_subsystem(fixes, resolved)
                 if by_sub is None:
                     continue
-                def open_runs(payload, t=tab["title"], f=fixes, res=res, comp=comp, resolved=resolved):
+                def open_runs(payload, t=tab, f=fixes, resolved=resolved):
                     sub, part = payload
-                    hits = [r for r, fixed, _, _, s_, p_ in f if (fixed is not None) == resolved
-                            and (s_ or charts.NOT_RECORDED) == sub and p_ == part]
-                    filters = {res["pos"]: {r["values"][res["pos"]] for r in hits} or {"\0"}}
-                    if comp:
-                        filters[comp["pos"]] = {part}
-                    self._go(t, filters)
+                    self._go_rows(t, [e[0] for e in f if (e[1] is not None) == resolved
+                                      and (e[4] or charts.NOT_RECORDED) == sub and e[5] == part])
                 by_sub.picked.connect(open_runs)
                 lists.add(self._titled(title, by_sub))
             if lists.items:

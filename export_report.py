@@ -290,7 +290,8 @@ class Snapshot:
         f_name, f_counts, f_opts = combine(lambda t, rows: store.fault_column(t))
         if f_counts:
             cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, f_name, subsystem=True)}</td>')
-        fixes = [e for t, rows in per_tab for e in store.resolutions(t, rows)]
+        # open issues from before the range stay in the summary until they're resolved
+        fixes = [e for t, _ in per_tab for e in store.resolutions(t, _rows(t), self.rng)]
         if not cells and not comp_counts and not fixes:
             out.append(f'<p style="color:{MUTED}">No reasons or subsystems recorded in this date range.</p>')
             return "".join(out)
@@ -310,7 +311,9 @@ class Snapshot:
             else:
                 out.append(f'<p style="margin-top:6px">{label}<span style="color:{MUTED}">'
                            f'No components recorded in this date range.</span></p>')
-        made = charts.resolution_charts(fixes)
+        from datetime import date as _date
+        as_of = min(self.rng[1], _date.today()) if self.rng else None
+        made = charts.resolution_charts(fixes, as_of)
         if made:
             donut, days, summary = made
             out.append(f'<table cellspacing="0" cellpadding="4" style="margin-top:8px"><tr>'

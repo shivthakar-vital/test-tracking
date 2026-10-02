@@ -236,10 +236,15 @@ def resolved_column(tab):
 
 FAILED = ("blocked", "cancelled", "warning")      # status classes that count as a failed run
 
-def resolutions(tab, rows):
+def resolutions(tab, rows, rng=None):
     """For each failed run: (row, resolved date or None, days it took or None, run date or None,
-    subsystem at fault, component) — the last two are "" when not filled in.
-    Days = the Resolved date minus the run's date (0 = fixed the same day)."""
+    subsystem at fault, component, carried over) — subsystem/component are "" when not filled in.
+    Days = the Resolved date minus the run's date (0 = fixed the same day).
+
+    With a date range (first day, last day), it covers what was going on in that range,
+    like an end-of-day summary: runs from the range, plus earlier failed runs that were
+    still open at the end of it or got resolved during it. A run resolved after the range
+    counts as not resolved yet. "Carried over" marks runs from before the range."""
     import charts
     res, dcol = resolved_column(tab), date_column(tab)
     fault, comp = fault_column(tab), component_column(tab)
@@ -251,10 +256,21 @@ def resolutions(tab, rows):
             continue
         ran = parse_date(r["values"][dcol["pos"]]) if dcol else None
         fixed = parse_date(r["values"][res["pos"]])
+        carried = False
+        if rng is not None:
+            first, last = rng
+            if ran is None or ran > last:
+                continue                              # undated, or run after the range
+            if fixed is not None and fixed > last:
+                fixed = None                          # not fixed yet as of the end of the range
+            if ran < first:
+                if fixed is not None and fixed < first:
+                    continue                          # an old issue, fixed before the range
+                carried = True
         days = (fixed - ran).days if fixed and ran and fixed >= ran else None
         part = r["values"][comp["pos"]].strip() if comp else ""
         sub = (r["values"][fault["pos"]].strip() if fault else "") or (split_component(part)[0] if part else "")
-        out.append((r, fixed, days, ran, sub, part))
+        out.append((r, fixed, days, ran, sub, part, carried))
     return out
 
 def is_bug_tab(tab):
