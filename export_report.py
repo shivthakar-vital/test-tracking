@@ -332,14 +332,20 @@ class Snapshot:
         made = charts.resolution_charts(fixes, as_of, noun="ticket" if ticket else "issue")
         if made:
             donut, days, summary = made
-            days_html = (f'{self._label("Days to resolve (run date → Resolved date)")}{self._image(days, 520)}<br>'
-                         if days is not None else "")
-            out.append(f'<table cellspacing="0" cellpadding="4" style="margin-top:8px"><tr>'
-                       f'<td valign="top" width="400">'
-                       f'{self._label("Resolved Tickets (Done)" if ticket else "Resolved Issues from Failed Runs")}'
-                       f'{self._image(donut)}</td>'
-                       f'<td valign="top">{days_html}<span style="font-size:12px">{esc(summary)}</span></td>'
-                       f'</tr></table>')
+            if ticket:                    # tickets: their status breakdown, not resolved vs open
+                tab = tabs[0]
+                rows = per_tab[0][1]
+                status_pie, status, _, _ = self._status_donut(tab, rows)
+                out.append(f'<p style="margin-top:8px">{self._label(status["name"] if status else "Status")}'
+                           f'{status_pie}</p>')
+            else:
+                days_html = (f'{self._label("Days to resolve (run date → Resolved date)")}'
+                             f'{self._image(days, 520)}<br>' if days is not None else "")
+                out.append(f'<table cellspacing="0" cellpadding="4" style="margin-top:8px"><tr>'
+                           f'<td valign="top" width="400">{self._label("Resolved Issues from Failed Runs")}'
+                           f'{self._image(donut)}</td>'
+                           f'<td valign="top">{days_html}<span style="font-size:12px">{esc(summary)}</span></td>'
+                           f'</tr></table>')
             for resolved, title in ((True, "Resolved, by subsystem"), (False, "Unresolved, by subsystem")):
                 by_sub = charts.resolved_by_subsystem(fixes, resolved)
                 if by_sub is not None:

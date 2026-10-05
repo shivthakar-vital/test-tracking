@@ -2208,18 +2208,30 @@ class Dashboard(QScrollArea):
                                  self._go_rows(t, [e[0] for e in f if (e[1] is not None) == (v == "Resolved")]))
             row = QHBoxLayout()
             row.setSpacing(28)
-            row.addWidget(self._titled("Resolved Tickets (Done)" if ticket else
-                                       "Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
-            right = QVBoxLayout()
-            right.setSpacing(6)
-            if days is not None:
-                right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
-            note = QLabel(summary)
-            note.setStyleSheet("font-size:12px; color:#1A1A18;")
-            note.setWordWrap(True)
-            right.addWidget(note)
-            right.addStretch(1)
-            row.addLayout(right, 1)
+            if ticket:                    # tickets: their status breakdown, not resolved vs open
+                status, colors = _colors_for(tab, rows)
+                counts = Counter(st.values())
+                order = charts.status_order(list(counts), status["options"] if status else [])
+                status_pie = charts.DonutChart()
+                done = sum(n for v, n in counts.items() if charts.classify(v) == "done")
+                status_pie.set_data([(v, counts[v], colors.get(v, charts.PENDING)) for v in order],
+                                    (f"{round(100 * done / len(rows))}%" if rows else "–", "done"))
+                status_pie.picked.connect(lambda v, t=tab, rs=rows: self._go_rows(
+                    t, [r for r in rs if store.row_status(t, r) == v]))
+                row.addWidget(self._titled(status["name"] if status else "Status", status_pie), 0, Qt.AlignTop)
+                row.addStretch(1)
+            else:
+                row.addWidget(self._titled("Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
+                right = QVBoxLayout()
+                right.setSpacing(6)
+                if days is not None:
+                    right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
+                note = QLabel(summary)
+                note.setStyleSheet("font-size:12px; color:#1A1A18;")
+                note.setWordWrap(True)
+                right.addWidget(note)
+                right.addStretch(1)
+                row.addLayout(right, 1)
             lay.addLayout(row)
             fault = store.fault_column(tab)
             lists = _FlowColumns()

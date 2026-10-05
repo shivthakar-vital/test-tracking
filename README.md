@@ -113,7 +113,7 @@ every time it syncs:
   runs per software version, per day) and the run list still show every run.
 - **Ticket analysis** (tabs like *Hardware Support Tickets*: a *Subsystem* and/or *Components*
   column, values like `IA - Disc Stabilizer`): an **Analysis** card with a subsystem pie, a
-  components tally by subsystem, **Resolved Tickets** (Done vs not yet), and **Resolved /
+  components tally by subsystem, a **Status** pie, and **Resolved /
   Unresolved, by subsystem**. The export adds the same section plus a list of **open tickets**
   with Jira links. Tickets have no dates, so this is always "as of now".
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
