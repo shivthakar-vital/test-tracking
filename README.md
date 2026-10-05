@@ -111,6 +111,11 @@ every time it syncs:
   subsystem lists) counts each issue once. An issue is resolved when every run in it is, and
   days to resolve count from its first run. Run-based charts (run status, Coder vs Atlantis,
   runs per software version, per day) and the run list still show every run.
+- **Ticket analysis** (tabs like *Hardware Support Tickets*: a *Subsystem* and/or *Components*
+  column, values like `IA - Disc Stabilizer`): an **Analysis** card with a subsystem pie, a
+  components tally by subsystem, **Resolved Tickets** (Done vs not yet), and **Resolved /
+  Unresolved, by subsystem**. The export adds the same section plus a list of **open tickets**
+  with Jira links. Tickets have no dates, so this is always "as of now".
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
   blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /

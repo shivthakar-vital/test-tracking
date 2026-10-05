@@ -325,6 +325,15 @@ def resolutions(tab, rows, rng=None):
     fault, comp = fault_column(tab), component_column(tab)
     out = []
     if res is None:
+        if is_ticket_tab(tab):                    # no dates: Done means resolved, as of now
+            for r in rows:
+                if is_blank(r):
+                    continue
+                done = charts.classify(row_status(tab, r)) == "done"
+                part = component_parts(comp, r["values"][comp["pos"]])[0] if comp and \
+                    component_parts(comp, r["values"][comp["pos"]]) else ""
+                sub = (r["values"][fault["pos"]].strip() if fault else "") or (split_component(part)[0] if part else "")
+                out.append((r, date.min if done else None, None, None, sub, part, False))
         return out
     for chain in issue_groups(tab, rows).values():
         failed = [r for r in chain if charts.classify(row_status(tab, r)) in FAILED]
@@ -477,15 +486,34 @@ def blank_label(col):
     return "(blank)"
 
 def fault_column(tab):
-    """e.g. "Subsystem At Fault": which subsystem caused a failed run."""
-    return next((c for c in tab["columns"] if "fault" in _words(c["name"])
-                 and c not in status_columns(tab)), None)
+    """Which subsystem an issue is in: "Subsystem At Fault" on run trackers, or a plain
+    "Subsystem" column (e.g. on Hardware Support Tickets)."""
+    cols = [c for c in tab["columns"] if c not in status_columns(tab)]
+    return next((c for c in cols if "fault" in _words(c["name"])), None) or \
+        next((c for c in cols if _words(c["name"]) == {"subsystem"}
+              or _words(c["name"]) == {"subsystems"}), None)
 
 def component_column(tab):
-    """e.g. "Subsystem Component": a dropdown of "Subsystem - Component" options."""
-    return next((c for c in tab["columns"] if c["kind"] == "dropdown"
-                 and "component" in _words(c["name"])
-                 and any(" - " in o for o in c["options"])), None)
+    """e.g. "Subsystem Component" / "Components": values like "IA - Disc Stabilizer",
+    as a dropdown (with those options) or typed in."""
+    for c in tab["columns"]:
+        if not _words(c["name"]) & {"component", "components"}:
+            continue
+        if c["kind"] == "dropdown" and any(" - " in o for o in c["options"]):
+            return c
+        if any(" - " in r["values"][c["pos"]] for r in tab["rows"]):
+            return c
+    return None
+
+def component_parts(col, value):
+    """Components in a cell: "HT - Camera, IA - Coils" → ["HT - Camera", "IA - Coils"]."""
+    bits = [b.strip() for b in re.split(r"[,;\n]", value or "") if b.strip()]
+    return bits if len(bits) > 1 and all(" - " in b for b in bits) else ([value.strip()] if value.strip() else [])
+
+def is_ticket_tab(tab):
+    """Ticket lists like Hardware Support Tickets: issues with a subsystem/component and a
+    status, but not run trackers or the bug tab. Every row is an issue; Done = resolved."""
+    return not is_run_tab(tab) and not is_bug_tab(tab) and bool(fault_column(tab) or component_column(tab))
 
 def split_component(value):
     """ "HT - Precision Stepper" → ("HT", "Precision Stepper")."""

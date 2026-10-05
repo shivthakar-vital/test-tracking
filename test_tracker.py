@@ -39,7 +39,7 @@ import export_report
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.6"         # bump this for each release, then push a matching tag (v1.1.6)
+APP_VERSION = "1.1.7"         # bump this for each release, then push a matching tag (v1.1.7)
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -1793,7 +1793,10 @@ class Dashboard(QScrollArea):
     def _go_rows(self, tab, rows):
         """Open a tab's table showing exactly these rows (by their first column, e.g. the
         run number), whatever their dates — e.g. open issues carried over from earlier days."""
-        key = tab["columns"][0]
+        # identify rows by the first column whose values are unique (Run Number, Key…)
+        filled = [r for r in tab["rows"] if not store.is_blank(r)]
+        key = next((c for c in tab["columns"]
+                    if len({r["values"][c["pos"]] for r in filled}) == len(filled)), tab["columns"][0])
         runs = [x for r in rows for x in r.get("_runs", [r])]       # a repeated issue opens all its runs
         self._go(tab["title"], {key["pos"]: {r["values"][key["pos"]] for r in runs} or {"\0"}}, dates=False)
 
@@ -2124,7 +2127,7 @@ class Dashboard(QScrollArea):
                    for v in options}
         pie = charts.DonutChart()
         total = sum(counts.values())
-        unit = "run" if store.is_workflow(col) else "issue"       # reasons/subsystems count issues
+        unit = "run" if store.is_workflow(col) else ("ticket" if store.is_ticket_tab(tab) else "issue")
         pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
                      (str(total), unit if total == 1 else unit + "s"))
         pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self._go(t, {p: {v}}))
@@ -2145,13 +2148,17 @@ class Dashboard(QScrollArea):
         lay.setContentsMargins(18, 14, 18, 16)
         lay.setSpacing(10)
         head = QHBoxLayout()
-        t = QLabel(f"{tab['title']} — Error Analysis")
+        ticket = store.is_ticket_tab(tab)
+        t = QLabel(f"{tab['title']} — " + ("Analysis" if ticket else "Error Analysis"))
         t.setStyleSheet("font-size:15px; font-weight:bold;")
         head.addWidget(t)
         failed = sum(charts.classify(v) in store.FAILED for v in st.values())
         failed_runs = sum(charts.classify(store.row_status(tab, r)) in store.FAILED for r in runs)
         note = f"{failed} failed run{'s' if failed != 1 else ''}"
-        if failed_runs > failed:
+        if ticket:
+            done = sum(charts.classify(v) == "done" for v in st.values())
+            note = f"{len(rows)} ticket{'s' if len(rows) != 1 else ''} · {len(rows) - done} open"
+        elif failed_runs > failed:
             note = (f"{failed} issue{'s' if failed != 1 else ''} from {failed_runs} failed runs "
                     f"(repeats counted once)")
         if self._dated(tab):
@@ -2183,7 +2190,7 @@ class Dashboard(QScrollArea):
 
         if comp:
             counts = Counter(p.strip() for r in rows
-                             for p in store.parts(comp, r["values"][comp["pos"]]) if p.strip())
+                             for p in store.component_parts(comp, r["values"][comp["pos"]]))
             groups = {}
             for value in list(comp["options"]) + sorted(v for v in counts if v not in comp["options"]):
                 sub, part = store.split_component(value)
@@ -2193,7 +2200,7 @@ class Dashboard(QScrollArea):
             tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self._go(t, {p: {v}}))
             lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
         as_of = min(self.range[1], date.today()) if self.range else None
-        made = charts.resolution_charts(fixes, as_of)
+        made = charts.resolution_charts(fixes, as_of, noun="ticket" if ticket else "issue")
         if made:
             donut, days, summary = made
             res = store.resolved_column(tab)
@@ -2201,10 +2208,12 @@ class Dashboard(QScrollArea):
                                  self._go_rows(t, [e[0] for e in f if (e[1] is not None) == (v == "Resolved")]))
             row = QHBoxLayout()
             row.setSpacing(28)
-            row.addWidget(self._titled("Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
+            row.addWidget(self._titled("Resolved Tickets (Done)" if ticket else
+                                       "Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
             right = QVBoxLayout()
             right.setSpacing(6)
-            right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
+            if days is not None:
+                right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
             note = QLabel(summary)
             note.setStyleSheet("font-size:12px; color:#1A1A18;")
             note.setWordWrap(True)

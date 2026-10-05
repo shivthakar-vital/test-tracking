@@ -82,7 +82,8 @@ def register(data):
     subs, cats = [], {}
     for tab in data.get("tabs", []):
         comp = store.component_column(tab)
-        for o in (comp or {}).get("options", []):
+        typed = [p for r in tab["rows"] for p in store.component_parts(comp, r["values"][comp["pos"]])] if comp else []
+        for o in (comp or {}).get("options", []) + typed:
             sub = store.split_component(o)[0]
             if sub and sub not in subs:
                 subs.append(sub)
@@ -544,11 +545,12 @@ def tab_colors(tab, rows=None):
 DAY_BUCKETS = [("Same day", 0, 0), ("1 day", 1, 1), ("2 days", 2, 2), ("3–6 days", 3, 6),
                ("1–2 weeks", 7, 13), ("2+ weeks", 14, 10 ** 6)]
 
-def resolution_charts(entries, today=None):
+def resolution_charts(entries, today=None, noun="issue"):
     """Charts for how failed runs were resolved, shared by the dashboard and the export.
     entries: from tracker_store.resolutions(). `today` is the "as of" day for how long
     open runs have waited (the end of the date range, if it's in the past).
-    Returns (donut, days bars, one-line summary) or None when there are no failed runs."""
+    Returns (donut, days bars or None, one-line summary) or None when there's nothing to show.
+    Without dates (e.g. tickets), there's no days chart."""
     from datetime import date as _date
     if not entries:
         return None
@@ -563,9 +565,11 @@ def resolution_charts(entries, today=None):
               for label, lo, hi in DAY_BUCKETS]
     while len(groups) > 1 and not groups[-1][1][0][1]:      # trim empty buckets off the end
         groups.pop()
-    bars = StackedBars()
-    bars.set_data(groups)
-    bits = [f"{len(done)} of {len(entries)} issue{'s' if len(entries) != 1 else ''} resolved"]
+    bars = None
+    if days:
+        bars = StackedBars()
+        bars.set_data(groups)
+    bits = [f"{len(done)} of {len(entries)} {noun}{'s' if len(entries) != 1 else ''} resolved"]
     earlier = lambda group: sum(1 for e in group if len(e) > 6 and e[6])   # carried over from before the range
     if earlier(done):
         bits[0] += f" ({earlier(done)} of them from earlier days)"
@@ -574,10 +578,10 @@ def resolution_charts(entries, today=None):
         bits.append(f"average {avg:.1f} day{'s' if round(avg, 1) != 1 else ''} to resolve")
         bits.append(f"longest {max(days)} day{'s' if max(days) != 1 else ''}")
     waiting = [(today - e[3]).days for e in open_ if e[3]]
-    if waiting:
-        oldest = max(waiting)
+    if open_:
         from_before = f", {earlier(open_)} from earlier days" if earlier(open_) else ""
-        bits.append(f"{len(open_)} still open{from_before}, oldest {oldest} day{'s' if oldest != 1 else ''}")
+        oldest = f", oldest {max(waiting)} day{'s' if max(waiting) != 1 else ''}" if waiting else ""
+        bits.append(f"{len(open_)} still open{from_before}{oldest}")
     return donut, bars, " · ".join(bits)
 
 
