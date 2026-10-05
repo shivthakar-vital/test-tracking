@@ -114,8 +114,8 @@ every time it syncs:
 - **Ticket analysis** (tabs like *Hardware Support Tickets*: a *Subsystem* and/or *Components*
   column, values like `IA - Disc Stabilizer`): an **Analysis** card with a subsystem pie, a
   components tally by subsystem, a **Status** pie, and **Resolved /
-  Unresolved, by subsystem**. The export adds the same section plus a list of **open tickets**
-  with Jira links. Tickets have no dates, so this is always "as of now".
+  Unresolved, by subsystem** (dashboard only, not in the export). Tickets have no dates,
+  so this is always "as of now".
 - Blank cells show as **Unassigned** in assignee columns, and **No status** in status columns.
 - Status colors follow meaning (an admin can change them; see *Admin: chart colours*): *Completed / Done / Results / Won't Do* are green, *In Progress*
   blue, *Error / Failed* red, *Blocked* dark purple, *Cancelled* orange, *No results* yellow, *Not Started /

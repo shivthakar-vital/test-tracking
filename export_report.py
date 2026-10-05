@@ -131,7 +131,6 @@ class Snapshot:
         runs = [t for t in tabs if store.is_run_tab(t)]
         analysis = [t for t in runs if store.fault_column(t) or store.component_column(t)]
         bugs = [t for t in tabs if store.is_bug_tab(t)]
-        tickets = [t for t in tabs if store.is_ticket_tab(t)]
 
         body = [f'''
 <table width="100%" cellspacing="0" cellpadding="0"><tr>
@@ -150,10 +149,6 @@ class Snapshot:
             body.append(self._heading(f"Error Analysis — {names}" if len(analysis) > 1 else
                                       f"{analysis[0]['title']} — Error Analysis"))
             body.append(self._analysis_section(analysis))
-        for tab in tickets:                # e.g. Hardware Support Tickets
-            body.append(self._heading(f"{tab['title']} — Analysis"))
-            body.append(self._analysis_section([tab], ticket=True))
-            body.append(self._open_tickets(tab))
         for tab in bugs:
             body.append(self._heading(tab["title"]))
             body.append(self._bugs_section(tab))
@@ -253,7 +248,7 @@ class Snapshot:
                          f'in Atlantis (in the PDF).</p>')
         return "".join(lines)
 
-    def _analysis_section(self, tabs, ticket=False):
+    def _analysis_section(self, tabs):
         """Why runs failed, summed across the given run trackers: one pie per reason
         column (matched by name), a Subsystem At Fault pie, and a tally of the
         components that had runs. Dropdown options from every tab are combined."""
@@ -267,10 +262,6 @@ class Snapshot:
         if runs > total_failed:
             note = (f"{_plural(total_failed, 'issue')} from {runs} failed runs in {esc(self.range_text)} "
                     f"(repeats counted once)")
-        if ticket:
-            rows = per_tab[0][1]
-            done = sum(charts.classify(store.row_status(tabs[0], r)) == "done" for r in rows)
-            note = f"{_plural(len(rows), 'ticket')} · {len(rows) - done} open (tickets have no dates, so this is as of now)"
         if len(tabs) > 1:
             note += ": " + " · ".join(f"{esc(k.replace(' End-to-End Tracker', ''))} {v}" for k, v in failed.items())
         out = [f'<p style="color:{MUTED}; margin-bottom:4px">{note} · blank cells are left out</p>']
@@ -302,10 +293,10 @@ class Snapshot:
                 (c for c in t["columns"] if c["name"].strip().lower() == k), None))
             if counts:
                 cells.append(f'<td valign="top" width="400">{self._label(name)}'
-                             f'{self._counts_pie(counts, opts, name, unit="ticket" if ticket else "issue")}</td>')
+                             f'{self._counts_pie(counts, opts, name)}</td>')
         f_name, f_counts, f_opts = combine(lambda t, rows: store.fault_column(t))
         if f_counts:
-            cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, f_name, subsystem=True, unit="ticket" if ticket else "issue")}</td>')
+            cells.append(f'<td valign="top">{self._label(f_name)}{self._counts_pie(f_counts, f_opts, f_name, subsystem=True)}</td>')
         # open issues from before the range stay in the summary until they're resolved
         fixes = [e for t, _ in per_tab for e in store.resolutions(t, _rows(t), self.rng)]
         if not cells and not comp_counts and not fixes:
@@ -329,55 +320,22 @@ class Snapshot:
                            f'No components recorded in this date range.</span></p>')
         from datetime import date as _date
         as_of = min(self.rng[1], _date.today()) if self.rng else None
-        made = charts.resolution_charts(fixes, as_of, noun="ticket" if ticket else "issue")
+        made = charts.resolution_charts(fixes, as_of)
         if made:
             donut, days, summary = made
-            if ticket:                    # tickets: their status breakdown, not resolved vs open
-                tab = tabs[0]
-                rows = per_tab[0][1]
-                status_pie, status, _, _ = self._status_donut(tab, rows)
-                out.append(f'<p style="margin-top:8px">{self._label(status["name"] if status else "Status")}'
-                           f'{status_pie}</p>')
-            else:
-                days_html = (f'{self._label("Days to resolve (run date → Resolved date)")}'
-                             f'{self._image(days, 520)}<br>' if days is not None else "")
-                out.append(f'<table cellspacing="0" cellpadding="4" style="margin-top:8px"><tr>'
-                           f'<td valign="top" width="400">{self._label("Resolved Issues from Failed Runs")}'
-                           f'{self._image(donut)}</td>'
-                           f'<td valign="top">{days_html}<span style="font-size:12px">{esc(summary)}</span></td>'
-                           f'</tr></table>')
+            days_html = (f'{self._label("Days to resolve (run date → Resolved date)")}'
+                         f'{self._image(days, 520)}<br>' if days is not None else "")
+            out.append(f'<table cellspacing="0" cellpadding="4" style="margin-top:8px"><tr>'
+                       f'<td valign="top" width="400">{self._label("Resolved Issues from Failed Runs")}'
+                       f'{self._image(donut)}</td>'
+                       f'<td valign="top">{days_html}<span style="font-size:12px">{esc(summary)}</span></td>'
+                       f'</tr></table>')
             for resolved, title in ((True, "Resolved, by subsystem"), (False, "Unresolved, by subsystem")):
                 by_sub = charts.resolved_by_subsystem(fixes, resolved)
                 if by_sub is not None:
                     out.append(f'<p style="margin-top:6px">{self._label(title)}'
                                f'{self._image(by_sub, WIDTH - 40)}</p>')
         return "".join(out)
-
-    def _open_tickets(self, tab):
-        """The tickets that aren't Done yet, with clickable keys."""
-        rows = [r for r in _rows(tab) if charts.classify(store.row_status(tab, r)) != "done"]
-        if not rows:
-            return f'<p style="color:{MUTED}">No open tickets.</p>'
-        key_col = next((c for c in tab["columns"] if any(r["links"][c["pos"]] for r in rows)), tab["columns"][0])
-        find = lambda *words: next((c for c in tab["columns"] if any(w in c["name"].lower() for w in words)), None)
-        summary, who = find("summary"), find("assign")
-        sub, comp = store.fault_column(tab), store.component_column(tab)
-        cols = [c for c in (summary, sub, comp, who) if c]
-        _, colors = charts.tab_colors(tab, rows)
-        lines = [f'<p style="margin-top:10px; margin-bottom:2px">{self._label(f"Open tickets ({len(rows)})")}</p>',
-                 '<table width="100%" cellspacing="0" cellpadding="5">',
-                 "<tr>" + "".join(f"<th>{esc(h)}</th>" for h in [key_col["name"], "Status"] + [c["name"] for c in cols])
-                 + "</tr>"]
-        for i, r in enumerate(rows):
-            link, key = r["links"][key_col["pos"]], r["values"][key_col["pos"]]
-            keyh = f'<a href="{esc(link, quote=True)}">{esc(key)}</a>' if link else esc(key)
-            st = store.row_status(tab, r)
-            dot = f'<span style="color:{colors.get(st, charts.PENDING)}">●</span> '
-            vals = [keyh, dot + esc(st)] + [esc(r["values"][c["pos"]].strip() or "—") for c in cols]
-            bg = ' bgcolor="#F7F7F5"' if i % 2 else ""
-            lines.append(f"<tr{bg}>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>")
-        lines.append("</table>")
-        return "".join(lines)
 
     def _bugs_section(self, tab):
         """Status of all bugs now; counts of open / new / closed / in QA; and the bugs
