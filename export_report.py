@@ -330,11 +330,10 @@ class Snapshot:
                        f'{self._image(donut)}</td>'
                        f'<td valign="top">{days_html}<span style="font-size:12px">{esc(summary)}</span></td>'
                        f'</tr></table>')
-            for resolved, title in ((True, "Resolved, by subsystem"), (False, "Unresolved, by subsystem")):
-                by_sub = charts.resolved_by_subsystem(fixes, resolved)
-                if by_sub is not None:
-                    out.append(f'<p style="margin-top:6px">{self._label(title)}'
-                               f'{self._image(by_sub, WIDTH - 40)}</p>')
+            open_by_sub = charts.resolved_by_subsystem(fixes, resolved=False)   # what still needs fixing
+            if open_by_sub is not None:
+                out.append(f'<p style="margin-top:6px">{self._label("Unresolved, by subsystem")}'
+                           f'{self._image(open_by_sub, WIDTH - 40)}</p>')
         return "".join(out)
 
     def _bugs_section(self, tab):

@@ -99,7 +99,8 @@ every time it syncs:
   the export) shows **Resolved Issues from Failed Runs** (resolved vs not yet), a **Days to
   resolve** tally (same day, 1 day, 2 days, 3–6 days, 1–2 weeks, 2+ weeks), a summary (how
   many are resolved, the average and longest time, and how long the oldest open one has
-  waited), and **Resolved, by subsystem** and **Unresolved, by subsystem**: the failed runs
+  waited), and **Resolved, by subsystem** and **Unresolved, by subsystem** (the export shows
+  only the unresolved one): the failed runs
   grouped by subsystem and component (runs with no component recorded are left out, as they're
   likely not a specific hardware issue). With a date filter (e.g. *Today*), these work like an
   end-of-day summary: failed runs from earlier days that are **still open** stay listed until
