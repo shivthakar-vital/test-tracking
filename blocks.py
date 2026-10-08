@@ -27,8 +27,9 @@ GOOD_BG, NEW_BG, DONE_INK = "#E3F4E1", "#E8F1FC", "#0B7A0B"
 class Ctx:
     """What's being drawn: the date range and whether it's for the dashboard or the export."""
 
-    def __init__(self, rng=None, range_text="All dates", export=False, settings=None):
+    def __init__(self, rng=None, range_text="All dates", export=False, settings=None, sheet_url=""):
         self.rng, self.range_text, self.export = rng, range_text, export
+        self.sheet_url = sheet_url                 # for links to cells in the export
         self.settings = settings or {}
 
     def all_rows(self, tab):
@@ -539,6 +540,15 @@ def _by_subsystem(b, tabs, ctx):
     return parts
 
 
+def cell_link(tab, row, col, ctx):
+    """A link to one cell: in the app, "cell:" opens it in the tab's table; in the
+    export, it opens the cell in Google Sheets."""
+    if not ctx.export:
+        return f"cell:{row['r']}:{col['pos']}:{tab['title']}"
+    if not ctx.sheet_url or "index" not in col:
+        return ""
+    return f"{store.tab_url(ctx.sheet_url, tab)}&range={store._a1_col(col['index'])}{row['r'] + 1}"
+
 def _notes_column(tab):
     """Where people write what happened: "Notes", else a summary or description."""
     for words in ({"note", "notes"}, {"summary"}, {"description"}):
@@ -581,8 +591,13 @@ def _open_issue_list(fixes, ctx, show_tab):
                 f'{esc(sub or "—")}{" · " + esc(comp) if comp else ""}'
         notes_col = _notes_column(tab)
         note = first["values"][notes_col["pos"]].strip() if notes_col else ""
+        note_html = esc(note) or f'<span style="color:{MUTED}">—</span>'
+        href = cell_link(tab, first, notes_col, ctx) if notes_col else ""
+        if href:                                        # click the note to go to its cell
+            note_html = (f'<a href="{esc(href, quote=True)}" style="color:{INK}; text-decoration:none">'
+                         f'{esc(note) or "— add a note"}</a>')
         cells = ([esc(short_name(tab["title"]))] if show_tab else []) + \
-            [run, esc(when), where, esc(open_for), esc(note) or f'<span style="color:{MUTED}">—</span>']
+            [run, esc(when), where, esc(open_for), note_html]
         bg = ' bgcolor="#F7F7F5"' if i % 2 else ""
         lines.append(f"<tr{bg}>" + "".join(
             f'<td valign="top" style="padding:3px 10px 3px 0{"; white-space:nowrap" if k < len(cells) - 1 else ""}">'

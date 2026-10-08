@@ -1941,6 +1941,21 @@ class TabPage(QWidget):
             self.proxy.set_filter(pos, None)
         self._update_counts()
 
+    def go_to_cell(self, sheet_row, pos):
+        """Select one cell (by its sheet row), clearing filters so it's visible."""
+        i = next((k for k, r in enumerate(self.model.tab["rows"]) if r["r"] == sheet_row), None)
+        if i is None:
+            return
+        self.clear_filters()
+        if self.search.text():
+            self.search.clear()
+        idx = self.proxy.mapFromSource(self.model.index(i, pos))
+        if not idx.isValid():
+            return
+        self.view.setCurrentIndex(idx)
+        self.view.scrollTo(idx, QAbstractItemView.PositionAtCenter)
+        self.view.setFocus()
+
     def show_only(self, filters):
         """filters: {column pos: set of values} — used when a chart is clicked."""
         self.clear_filters()
@@ -2715,8 +2730,7 @@ class Dashboard(QScrollArea):
             w.setWordWrap(True)
             w.setStyleSheet("font-size:12px;")
             w.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-            w.linkActivated.connect(lambda href, pk=pick: (pk and pk(href[5:])) if href.startswith("pick:")
-                                    else _open_link(href))
+            w.linkActivated.connect(lambda href, pk=pick: self._link(href, pk))
         else:
             w = c
             if pick and hasattr(w, "picked"):
@@ -2724,6 +2738,16 @@ class Dashboard(QScrollArea):
             if pick and hasattr(w, "picked_cb"):
                 w.picked_cb = pick
         return self._titled(part.title, w) if part.title else w
+
+    def _link(self, href, pick):
+        if href.startswith("pick:"):
+            if pick:
+                pick(href[5:])
+        elif href.startswith("cell:"):                 # cell:<sheet row>:<column pos>:<tab title>
+            r, pos, title = href[5:].split(":", 2)
+            self.win.go_to_cell(title, int(r), int(pos))
+        else:
+            _open_link(href)
 
     def _target(self, t):
         """Open what a click on a chart points at."""
@@ -2966,6 +2990,14 @@ class TrackerApp(QMainWindow):
             _open_link(store.tab_url(self.url, page.model.tab))
         elif self.url:
             _open_link(self.url)
+
+    def go_to_cell(self, title, sheet_row, pos):
+        """Open a tab's table with one cell selected (e.g. a run's Notes)."""
+        page = self.pages.get(title)
+        if page is None:
+            return
+        self.tabs.setCurrentWidget(page)
+        page.go_to_cell(sheet_row, pos)
 
     def show_tab(self, title, filters=None):
         page = self.pages.get(title)
