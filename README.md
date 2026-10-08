@@ -22,10 +22,13 @@ are written straight back to the sheet.
   have a date column (e.g. the end-to-end run trackers); other tabs show everything. Clicking
   a chart opens the table with the same dates applied. Your choice is remembered.
 - **⬇ Export snapshot**: pick a date range (Today by default), tick which cards and charts to
-  include (the defaults come from each card's ✎ Customize settings), and pick a layout:
-  **Wide** (cards side by side, landscape-shaped so Slack shows it large), **Tall** (one
-  column), or **One image per card**. Saves a **PNG** (to paste into Slack or email) and a
-  matching **PDF** (where run names and bug keys are clickable links), with a live preview.
+  include (the defaults come from each card's ✎ Customize settings), and pick what to save:
+  - **Slack summary + full report** (default): a 16:9 **summary PNG** with the headline numbers
+    (runs, failed-run issues, unresolved, new and closed bugs) and the key donuts, sized to read
+    well in Slack's preview, plus the **full report** as a tall PNG and a **PDF** (run names and
+    bug keys are clickable). Post the summary PNG and the PDF.
+  - **Full report only**, or **One image per card**.
+  A live preview shows the result before saving.
 - **Bug summary** (tabs with *Created* and *Date Done* columns, like *Automated Bug Statuses*):
   cards for **Open now**, **New**, **Closed**, and **In QA**, a one-line summary, and lists of
   the new, closed, and in-QA bugs with clickable Jira keys. *New* and *Closed* follow the

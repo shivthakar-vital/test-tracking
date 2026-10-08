@@ -2073,9 +2073,10 @@ class ExportDialog(QDialog):
         self.picks = dict(saved.get("picks") or {})       # only choices that differ from the layouts
         self.layouts = {t["title"]: win.layout_of(t) for t in win.data["tabs"]}
 
-        intro = QLabel("Saves the dashboard's cards for the dates you pick: a <b>PNG</b> to paste "
-                       "into Slack or email, and a matching <b>PDF</b> where run names and bug keys "
-                       "are clickable. Tick what to include; the defaults come from each card's "
+        intro = QLabel("Saves the dashboard's cards for the dates you pick. For Slack, post the "
+                       "<b>summary PNG</b> (headline numbers and key charts, readable in the preview) "
+                       "with the <b>PDF</b> (the full report, where run names and bug keys are "
+                       "clickable). Tick what to include; the defaults come from each card's "
                        "✎ Customize settings.")
         intro.setWordWrap(True)
         self.preset = QComboBox()
@@ -2098,9 +2099,10 @@ class ExportDialog(QDialog):
         self.style = QComboBox()
         for k, label in export_report.STYLES.items():
             self.style.addItem(label, k)
-        self.style.setCurrentIndex(max(self.style.findData(saved.get("style", "wide")), 0))
-        self.style.setToolTip("Wide: cards side by side, so Slack shows the picture large.\n"
-                              "Tall: one column, like before.\n"
+        self.style.setCurrentIndex(max(self.style.findData(saved.get("style", "slack")), 0))
+        self.style.setToolTip("Slack summary: a 16:9 picture with the headline numbers and key charts,\n"
+                              "readable in Slack's preview, plus the full report (PNG + PDF).\n"
+                              "Full report only: every ticked card in one column.\n"
                               "One image per card: a separate PNG for each card.")
         self.style.currentIndexChanged.connect(self._update)
 
@@ -2275,15 +2277,16 @@ class ExportDialog(QDialog):
                 made, done = store.created_date_column(tab), store.done_date_column(tab)
                 count = lambda c: sum(store.in_range(r["values"][c["pos"]], rng) for r in _visible_rows(tab)) if c else 0
                 bits.append(f"bugs: {count(made)} new, {count(done)} closed")
-        files = (f"{self.base_name()} - 1 ….png, one per card, and .pdf"
-                 if self.style.currentData() == "cards" else f"{self.base_name()}.png and .pdf")
+        files = {"cards": f"{self.base_name()} - 1 ….png (one per card) and .pdf",
+                 "slack": f"{self.base_name()}.png (summary), “… - full report.png” and .pdf"
+                 }.get(self.style.currentData(), f"{self.base_name()}.png and .pdf")
         self.summary.setText(f"{self.label()} · " + " · ".join(bits) + f"\nFiles: {files}")
         self.preview_timer.start(350)
 
     def _draw_preview(self):
         try:
             snap = self.snapshot()
-            img = snap.image()
+            img = snap.summary_image() if self.style.currentData() == "slack" else snap.image()
         except Exception as exc:
             self.preview.setPixmap(QPixmap())
             self.preview.setText(f"Couldn't draw the preview:\n{type(exc).__name__}: {exc}")
@@ -2299,9 +2302,9 @@ class ExportDialog(QDialog):
         self.preview.setPixmap(pm.scaled(box.width() - 12, box.height() - 12,
                                          Qt.KeepAspectRatio, Qt.SmoothTransformation))
         n = len(snap.cards)
-        self.preview_note.setText(f"{snap.width} × {snap.page_h} px · {n} card{'s' if n != 1 else ''}"
-                                  + (" · each card is saved as its own PNG"
-                                     if self.style.currentData() == "cards" else ""))
+        note = {"slack": "Slack summary (16:9). The full report is saved next to it, and as the PDF.",
+                "cards": "Each card is saved as its own PNG."}.get(self.style.currentData(), "")
+        self.preview_note.setText(f"{n} card{'s' if n != 1 else ''} · {note}")
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
