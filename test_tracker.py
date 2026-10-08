@@ -758,6 +758,7 @@ class CardEditor(QDialog):
         for v, label in self.HIDE_LABELS:
             self.hide_box.addItem(label, v)
         self.sub_colors = QCheckBox("Use subsystem colours")
+        self.notes_box = QCheckBox("List each unresolved issue with its notes (first run of a repeat)")
         self.list_cols = QListWidget()
         self.list_cols.setMaximumHeight(150)
         for c in self.cols:
@@ -776,7 +777,7 @@ class CardEditor(QDialog):
         for w in (self.col_box, self.count_box, self.which_box, self.hide_box):
             w.currentIndexChanged.connect(self._block_edited)
         self.title_edit.textEdited.connect(self._block_edited)
-        for w in (self.sub_colors, self.new_row, self.b_dash, self.b_export):
+        for w in (self.sub_colors, self.notes_box, self.new_row, self.b_dash, self.b_export):
             w.toggled.connect(self._block_edited)
         self.list_cols.itemChanged.connect(self._block_edited)
 
@@ -790,6 +791,7 @@ class CardEditor(QDialog):
         self.form.addRow("Which", self.which_box)
         self.form.addRow("Zeros", self.hide_box)
         self.form.addRow("", self.sub_colors)
+        self.form.addRow("", self.notes_box)
         self.form.addRow("Columns", self.list_cols)
         places = QHBoxLayout()
         for w in (self.b_dash, self.b_export, self.new_row):
@@ -943,6 +945,7 @@ class CardEditor(QDialog):
         for k in range(self.list_cols.count()):
             item = self.list_cols.item(k)
             item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in chosen else Qt.Unchecked)
+        self.notes_box.setChecked(b.get("notes", True))
         self.new_row.setChecked(b.get("new_row", False))
         self.b_dash.setChecked(b["dash"])
         self.b_export.setChecked(b["export"])
@@ -957,6 +960,7 @@ class CardEditor(QDialog):
                 self.which_box: t in self.WHICH,
                 self.hide_box: t == "tally",
                 self.sub_colors: t == "pie",
+                self.notes_box: t == "by_subsystem",
                 self.list_cols: t == "list"}
         for w, on in show.items():
             w.setVisible(on)
@@ -1033,6 +1037,8 @@ class CardEditor(QDialog):
             b["which"] = self.which_box.currentData()
         if b["type"] == "tally":
             b["hide_zero"] = self.hide_box.currentData()
+        if b["type"] == "by_subsystem":
+            b["notes"] = self.notes_box.isChecked()
         if b["type"] == "pie":
             b["colors"] = "subsystem" if self.sub_colors.isChecked() else "category"
         if b["type"] == "list":
@@ -2662,8 +2668,20 @@ class Dashboard(QScrollArea):
             lay_.addWidget(_small_label(text, MUTED))
             return frame
 
+        lines = []
         for row in blocks.rows_of(drawn):
-            parts = [p for _, ps in row for p in ps]
+            cur = []
+            for p in (p for _, ps in row for p in ps):
+                if p.full and not isinstance(p.content, str) or not p.full:
+                    cur.append(p)
+                    continue
+                if cur:                                  # tables get a row of their own
+                    lines.append(cur)
+                lines.append([p])
+                cur = []
+            if cur:
+                lines.append(cur)
+        for parts in lines:
             texts = [p for p in parts if isinstance(p.content, str)]
             if len(texts) > 1 and len(texts) == len(parts):     # side-by-side lists wrap
                 flow = _FlowColumns()

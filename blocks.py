@@ -530,7 +530,65 @@ def _by_subsystem(b, tabs, ctx):
         return None
     test = lambda e, p: ((e[1] is not None) == resolved and (e[4] or charts.NOT_RECORDED) == p[0]
                          and e[5] == p[1])
-    return [Part(lay.auto_title(tabs[0], b), tally, _rows_pick(tabs[0], fixes, test), wide=True)]
+    parts = [Part(lay.auto_title(tabs[0], b), tally, _rows_pick(tabs[0], fixes, test), wide=True)]
+    if not resolved and b.get("notes", True):
+        listing = _open_issue_list(fixes, ctx, len(tabs) > 1)
+        if listing:
+            parts.append(Part("", listing, lambda _, t=tabs[0], f=fixes: (
+                "rows", t, [e[0] for _, e in f if e[1] is None and e[5]]), wide=True, full=True))
+    return parts
+
+
+def _notes_column(tab):
+    """Where people write what happened: "Notes", else a summary or description."""
+    for words in ({"note", "notes"}, {"summary"}, {"description"}):
+        col = next((c for c in tab["columns"] if store._words(c["name"]) & words), None)
+        if col:
+            return col
+    return None
+
+def _open_issue_list(fixes, ctx, show_tab):
+    """Each unresolved issue with its note — from the first run of a repeated issue,
+    since that's where the note is written. Oldest first. Issues with no component
+    are left out, like in the tally above."""
+    items = [(t, e) for t, e in fixes if e[1] is None and e[5]]
+    if not items:
+        return None
+    as_of = min(ctx.rng[1], date.today()) if ctx.rng else date.today()
+    items.sort(key=lambda te: te[1][3] or date.max)
+    head = (["Tracker"] if show_tab else []) + ["Run", "Date", "Subsystem", "Open for", "Notes"]
+    th = "".join(f'<th align="left" style="color:{MUTED}; font-size:11px; padding:4px 10px 4px 0">'
+                 f'{esc(h)}</th>' for h in head)
+    lines = [f'<span style="font-size:11px; font-weight:bold; color:{MUTED}">UNRESOLVED ISSUES · NOTES</span>',
+             f'<table width="100%" cellspacing="0" cellpadding="5"><tr>{th}</tr>']
+    for i, (tab, e) in enumerate(items):
+        first = e[0].get("_runs", [e[0]])[0]           # the first run of a repeated issue
+        name_col = store.run_name_column(tab) or tab["columns"][0]
+        num = first["values"][tab["columns"][0]["pos"]].strip()
+        name, link = first["values"][name_col["pos"]].strip(), first["links"][name_col["pos"]]
+        label = esc(name or num or "Open")
+        run = f'<a href="{esc(link, quote=True)}" style="color:{LINK}">{label}</a>' if link else label
+        if num and name_col is not tab["columns"][0]:
+            run = f"#{esc(num.lstrip('#'))} · {run}"
+        repeats = len(e[0].get("_runs", [])) - 1
+        if repeats > 0:
+            run += f' <span style="color:{MUTED}">(+{repeats} repeat{"s" if repeats != 1 else ""})</span>'
+        ran = e[3]
+        when = f"{ran.month}/{ran.day}/{ran.year}" if ran else ""
+        open_for = _plural((as_of - ran).days, "day") if ran else ""
+        sub, comp = e[4], store.split_component(e[5])[1] or e[5]
+        where = f'<span style="color:{charts.subsystem_color(sub) if sub else MUTED}">●</span> ' \
+                f'{esc(sub or "—")}{" · " + esc(comp) if comp else ""}'
+        notes_col = _notes_column(tab)
+        note = first["values"][notes_col["pos"]].strip() if notes_col else ""
+        cells = ([esc(short_name(tab["title"]))] if show_tab else []) + \
+            [run, esc(when), where, esc(open_for), esc(note) or f'<span style="color:{MUTED}">—</span>']
+        bg = ' bgcolor="#F7F7F5"' if i % 2 else ""
+        lines.append(f"<tr{bg}>" + "".join(
+            f'<td valign="top" style="padding:3px 10px 3px 0{"; white-space:nowrap" if k < len(cells) - 1 else ""}">'
+            f'{c}</td>' for k, c in enumerate(cells)) + "</tr>")
+    lines.append("</table>")
+    return "".join(lines)
 
 
 _RENDERERS = {"status": _status, "pie": _pie, "bars": _bars, "count": _count, "tally": _tally,
