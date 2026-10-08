@@ -24,7 +24,8 @@ from PyQt5.QtWidgets import (
     QDialog, QFormLayout, QDialogButtonBox, QFileDialog, QShortcut, QComboBox,
     QCheckBox, QTabWidget, QScrollArea, QStyledItemDelegate, QDateEdit, QMenu,
     QToolButton, QWidgetAction, QListWidget, QListWidgetItem, QPlainTextEdit,
-    QAbstractItemView, QListView, QSizePolicy, QColorDialog, QInputDialog
+    QAbstractItemView, QListView, QSizePolicy, QColorDialog, QInputDialog, QTreeWidget,
+    QTreeWidgetItem
 )
 from PyQt5.QtCore import (
     Qt, QObject, QRunnable, QThreadPool, QTimer, QUrl, QDate, pyqtSignal,
@@ -34,12 +35,16 @@ from PyQt5.QtGui import (
     QFont, QColor, QPalette, QKeySequence, QDesktopServices, QPixmap, QPainter, QIcon
 )
 
+import blocks
 import charts
 import export_report
+import layout
 import tracker_store as store
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.1.7"         # bump this for each release, then push a matching tag (v1.1.7)
+APP_VERSION = "1.2.0"         # bump this for each release, then push a matching tag (v1.2.0)
+APP_CHANNEL = "testing"       # "stable" or "testing": testing releases are published as GitHub
+                              # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
@@ -253,10 +258,14 @@ class SettingsDialog(QDialog):
         colors_btn.setToolTip("Admin only: change the colour of each status, for everyone")
         colors_btn.clicked.connect(lambda: parent.open_colors(self))
         colors_btn.setEnabled(bool(parent.data) and parent.can_edit)
-        columns_btn = QPushButton("📊 Charts & filters…")
-        columns_btn.setToolTip("Admin only: choose which columns get filters and dashboard charts")
+        columns_btn = QPushButton("🔎 Filters…")
+        columns_btn.setToolTip("Admin only: choose which columns get filter buttons. "
+                               "Charts are chosen with ✎ Customize on each dashboard card.")
         columns_btn.clicked.connect(lambda: parent.open_columns(self))
         columns_btn.setEnabled(bool(parent.data) and parent.can_edit)
+        versions_btn = QPushButton("Versions…")
+        versions_btn.setToolTip("Install another version, e.g. go back to the stable build")
+        versions_btn.clicked.connect(lambda: parent.open_versions(self))
         admin_row = QHBoxLayout()
         admin_row.addWidget(colors_btn)
         admin_row.addWidget(columns_btn)
@@ -281,6 +290,13 @@ class SettingsDialog(QDialog):
         root.addSpacing(6)
         root.addWidget(_small_label("Admin"))
         root.addLayout(admin_row)
+        root.addSpacing(6)
+        ver_row = QHBoxLayout()
+        ver_row.addWidget(_small_label(f"App version v{APP_VERSION}"
+                                       + (" (testing build)" if APP_CHANNEL == "testing" else ""), MUTED))
+        ver_row.addStretch(1)
+        ver_row.addWidget(versions_btn)
+        root.addLayout(ver_row)
         root.addWidget(buttons)
 
     def _fill_list(self):
@@ -413,9 +429,9 @@ class ColorsDialog(QDialog):
         # 3. each category pie's values (Reason for Error Runs, Workflow Type…)
         for tab in data["tabs"]:
             for c in tab["columns"]:
-                if not store.wants_pie(c):
-                    continue
                 col = c["name"].strip().lower()
+                if col not in charts.CATEGORY_ORDER or c is store.fault_column(tab):
+                    continue
                 for v in list(charts.CATEGORY_ORDER.get(col, [])):
                     add(c["name"].strip(), f"{col}:{v.lower()}", v, tab["title"],
                         lambda col=col, v=v: charts.category_color(col, v, use_overrides=False))
@@ -542,11 +558,12 @@ class ColorsDialog(QDialog):
 
 
 class ColumnsDialog(QDialog):
-    """Admin: which columns get a filter button and a dashboard chart."""
+    """Admin: which columns get a filter button on their tab. (Charts are chosen per
+    card with ✎ Customize; the old chart/pie choices still shape un-customized cards.)"""
 
     def __init__(self, win, data, settings):
         super().__init__(win)
-        self.setWindowTitle("Charts & filters")
+        self.setWindowTitle("Filters")
         self.setMinimumWidth(640)
         self.settings = dict(settings)
 
@@ -570,22 +587,21 @@ class ColumnsDialog(QDialog):
                     info[purpose] |= store._default_on(tab, rows, c, purpose)
         self.found, self.order = found, order
 
-        intro = QLabel("Choose which columns get a <b>filter</b> button on their tab, a bar "
-                       "<b>chart</b> (status by that column), or their own <b>pie</b> chart "
-                       "(dropdowns only, e.g. “Why?”) on the dashboard. Turn these off "
+        intro = QLabel("Choose which columns get a <b>filter</b> button on their tab. Turn it off "
                        "for columns full of generated or one-off values, like run names or "
-                       "patient names. Applies to everyone using this release sheet.")
+                       "patient names. Applies to everyone using this release sheet.<br><br>"
+                       "To choose <b>charts</b>, click <b>✎ Customize</b> on a dashboard card.")
         intro.setWordWrap(True)
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(4)
-        for i, text in enumerate(("Column", "Filter", "Chart", "Pie", "Used in")):
+        for i, text in enumerate(("Column", "Filter", "Used in")):
             grid.addWidget(_small_label(text.upper(), "#888885", 10), 0, i)
         self.boxes = {}
         for i, key in enumerate(order, start=1):
             info = found[key]
             grid.addWidget(QLabel(info["name"]), i, 0)
-            for j, purpose in enumerate(("filter", "chart", "pie"), start=1):
+            for j, purpose in enumerate(("filter",), start=1):
                 if purpose == "pie" and not info["dropdown"]:
                     continue                               # pies are for set categories
                 box = QCheckBox()
@@ -596,8 +612,8 @@ class ColumnsDialog(QDialog):
                 self.boxes[(purpose, key)] = box
             where = _small_label(", ".join(dict.fromkeys(info["tabs"])), MUTED)
             where.setToolTip(where.text())
-            grid.addWidget(where, i, 4)
-        grid.setColumnStretch(4, 1)
+            grid.addWidget(where, i, 2)
+        grid.setColumnStretch(2, 1)
         inner = QWidget()
         inner.setLayout(grid)
         scroll = QScrollArea()
@@ -607,9 +623,7 @@ class ColumnsDialog(QDialog):
         scroll.setMinimumHeight(min(30 * len(order) + 40, 360))
         self.resize(720, min(30 * len(order) + 330, 760))
 
-        note = _small_label("Status columns always have a filter and the donut. Each tab shows "
-                            "up to 3 side charts, in column order. Charts only appear once a "
-                            "column has at least two different values.", MUTED)
+        note = _small_label("Status columns always have a filter.", MUTED)
         note.setWordWrap(True)
         reset = QPushButton("Reset all to built-in defaults")
         reset.clicked.connect(self._reset)
@@ -641,12 +655,564 @@ class ColumnsDialog(QDialog):
 
     def result_settings(self):
         """Only choices that differ from the built-in default are stored."""
-        out = {k: v for k, v in self.settings.items()
-               if not k.startswith((store.FILTER_PREFIX, store.CHART_PREFIX, store.PIE_PREFIX))}
+        out = {k: v for k, v in self.settings.items() if not k.startswith(store.FILTER_PREFIX)}
         for (purpose, key), box in self.boxes.items():
             if box.isChecked() != self.found[key][purpose]:
                 out[self._key(purpose, key)] = "on" if box.isChecked() else "off"
         return out
+
+
+class CardEditor(QDialog):
+    """Admin: what a tab's dashboard cards show, how, and what goes in the export.
+    Changes preview live below; Save stores them in the sheet for everyone."""
+
+    COUNT_LABELS = [("rows", "Count every row"), ("issues", "Count a repeated issue once")]
+    HIDE_LABELS = [(False, "Show every value"), ("export", "Hide zeros in the export"),
+                   ("always", "Hide zeros everywhere")]
+    WHICH = {"bug_list": [("new", "New bugs"), ("closed", "Closed bugs"), ("qa", "In QA")],
+             "by_subsystem": [("unresolved", "Unresolved"), ("resolved", "Resolved")]}
+
+    def __init__(self, win, tab, card_id=None, add_column=None):
+        super().__init__(win)
+        self.win, self.tab = win, tab
+        self.setWindowTitle(f"Customize — {tab['title']}")
+        self.lo = layout.copy_layout(win.layout_of(tab))
+        self.cols = layout.all_columns(tab)
+        self._loading = False
+        self.reset_requested = False
+
+        # ── card picker ──
+        self.card_box = QComboBox()
+        self.card_box.currentIndexChanged.connect(self._card_changed)
+        new_card = QPushButton("+ New card")
+        new_card.setToolTip("Add another card for this tab, e.g. one just for the export")
+        new_card.clicked.connect(self._new_card)
+        self.del_card = QPushButton("Delete card")
+        self.del_card.clicked.connect(self._delete_card)
+        top = QHBoxLayout()
+        top.addWidget(_small_label("Card"))
+        top.addWidget(self.card_box, 1)
+        top.addWidget(new_card)
+        top.addWidget(self.del_card)
+
+        self.card_title = QLineEdit()
+        self.card_title.textEdited.connect(self._card_edited)
+        self.card_dash = QCheckBox("Show on the dashboard")
+        self.card_export = QCheckBox("Include in the export")
+        self.card_combine = QCheckBox("In the export, merge with the same card from other tabs")
+        self.card_combine.setToolTip("e.g. one Error Analysis for VitalOne + Viking")
+        for w in (self.card_dash, self.card_export, self.card_combine):
+            w.toggled.connect(self._card_edited)
+        card_form = QFormLayout()
+        card_form.addRow("Title", self.card_title)
+        checks = QHBoxLayout()
+        for w in (self.card_dash, self.card_export, self.card_combine):
+            checks.addWidget(w)
+        checks.addStretch(1)
+        card_form.addRow("", checks)
+
+        # ── blocks list ──
+        self.list = QListWidget()
+        self.list.setMinimumWidth(400)
+        self.list.setWordWrap(True)
+        self.list.setSpacing(2)
+        self.list.currentRowChanged.connect(self._block_selected)
+        add = QToolButton()
+        add.setText("+ Add chart ▾")
+        add.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(add)
+        for t, (label, _, help_) in layout.BLOCK_TYPES.items():
+            act = menu.addAction(label)
+            act.setToolTip(help_)
+            act.triggered.connect(lambda _, t=t: self._add_block(t))
+        add.setMenu(menu)
+        up, down, remove = QPushButton("↑"), QPushButton("↓"), QPushButton("Remove")
+        up.setToolTip("Move up")
+        down.setToolTip("Move down")
+        up.clicked.connect(lambda: self._move(-1))
+        down.clicked.connect(lambda: self._move(1))
+        remove.clicked.connect(self._remove_block)
+        list_btns = QHBoxLayout()
+        for w in (add, up, down, remove):
+            list_btns.addWidget(w)
+        list_btns.addStretch(1)
+        left = QVBoxLayout()
+        left.addWidget(_small_label("CHARTS ON THIS CARD (TOP TO BOTTOM)", "#888885", 10))
+        left.addWidget(self.list, 1)
+        left.addLayout(list_btns)
+
+        # ── one block's settings ──
+        self.type_box = QComboBox()
+        for t, (label, _, help_) in layout.BLOCK_TYPES.items():
+            self.type_box.addItem(label, t)
+            self.type_box.setItemData(self.type_box.count() - 1, help_, Qt.ToolTipRole)
+        self.col_box = QComboBox()
+        for c in self.cols:
+            self.col_box.addItem(c["name"] + (" (from the app)" if c.get("derived") else ""), layout.col_ref(c))
+        self.title_edit = QLineEdit()
+        self.count_box = QComboBox()
+        for v, label in self.COUNT_LABELS:
+            self.count_box.addItem(label, v)
+        self.which_box = QComboBox()
+        self.hide_box = QComboBox()
+        for v, label in self.HIDE_LABELS:
+            self.hide_box.addItem(label, v)
+        self.sub_colors = QCheckBox("Use subsystem colours")
+        self.list_cols = QListWidget()
+        self.list_cols.setMaximumHeight(150)
+        for c in self.cols:
+            item = QListWidgetItem(c["name"])
+            item.setData(Qt.UserRole, layout.col_ref(c))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.list_cols.addItem(item)
+        self.new_row = QCheckBox("Start a new row")
+        self.b_dash = QCheckBox("Show on the dashboard")
+        self.b_export = QCheckBox("Include in the export")
+        self.help_lbl = _small_label("", MUTED)
+        self.help_lbl.setWordWrap(True)
+
+        self.type_box.currentIndexChanged.connect(self._type_changed)
+        for w in (self.col_box, self.count_box, self.which_box, self.hide_box):
+            w.currentIndexChanged.connect(self._block_edited)
+        self.title_edit.textEdited.connect(self._block_edited)
+        for w in (self.sub_colors, self.new_row, self.b_dash, self.b_export):
+            w.toggled.connect(self._block_edited)
+        self.list_cols.itemChanged.connect(self._block_edited)
+
+        self.form = QFormLayout()
+        self.form.setSpacing(8)
+        self.form.addRow("Show as", self.type_box)
+        self.form.addRow("", self.help_lbl)
+        self.form.addRow("Column", self.col_box)
+        self.form.addRow("Title", self.title_edit)
+        self.form.addRow("Count", self.count_box)
+        self.form.addRow("Which", self.which_box)
+        self.form.addRow("Zeros", self.hide_box)
+        self.form.addRow("", self.sub_colors)
+        self.form.addRow("Columns", self.list_cols)
+        places = QHBoxLayout()
+        for w in (self.b_dash, self.b_export, self.new_row):
+            places.addWidget(w)
+        places.addStretch(1)
+        self.form.addRow("", places)
+        self.right = QWidget()
+        self.right.setLayout(self.form)
+        self.right.setMinimumWidth(440)
+
+        middle = QHBoxLayout()
+        middle.addLayout(left, 0)
+        middle.addWidget(self.right, 1)
+
+        # ── live preview ──
+        self.preview = QScrollArea()
+        self.preview.setWidgetResizable(True)
+        self.preview.setFrameShape(QFrame.NoFrame)
+        self.preview.setMinimumHeight(300)
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.timeout.connect(self._draw_preview)
+
+        # ── bottom buttons ──
+        reset = QPushButton("Reset this tab to built-in")
+        reset.setToolTip("Forget the customization and go back to the app's own choice of charts")
+        reset.clicked.connect(self._reset)
+        copy_btn = QPushButton("Copy from another release…")
+        self.copies = win.layouts_elsewhere(tab)
+        copy_btn.setEnabled(bool(self.copies))
+        copy_btn.setToolTip("Use the layout saved for this tab in another release sheet"
+                            if self.copies else "No other release has a saved layout for this tab")
+        copy_btn.clicked.connect(self._copy_from)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        save = buttons.addButton("Save for everyone", QDialogButtonBox.AcceptRole)
+        save.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        bottom = QHBoxLayout()
+        bottom.addWidget(reset)
+        bottom.addWidget(copy_btn)
+        bottom.addStretch(1)
+        bottom.addWidget(buttons)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
+        root.addLayout(top)
+        root.addLayout(card_form)
+        root.addLayout(middle, 0)
+        root.addWidget(_small_label("PREVIEW (DASHBOARD, CURRENT DATES)", "#888885", 10))
+        root.addWidget(self.preview, 1)
+        root.addLayout(bottom)
+        self.resize(1100, 900)
+
+        self._fill_cards()
+        if card_id:
+            i = next((k for k, c in enumerate(self.lo["cards"]) if c["id"] == card_id), 0)
+            self.card_box.setCurrentIndex(i)
+        if add_column:
+            col = layout.find_column(tab, add_column)
+            b = (layout.suggest(tab, col) if col else None) or layout.block("count", add_column)
+            b["export"] = True
+            self.card_box.setCurrentIndex(0)
+            self.card()["blocks"].append(b)
+            self._fill_blocks(len(self.card()["blocks"]) - 1)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def card(self):
+        i = self.card_box.currentIndex()
+        return self.lo["cards"][i] if 0 <= i < len(self.lo["cards"]) else None
+
+    def block(self):
+        card, i = self.card(), self.list.currentRow()
+        return card["blocks"][i] if card and 0 <= i < len(card["blocks"]) else None
+
+    def _fill_cards(self):
+        self._loading = True
+        i = max(self.card_box.currentIndex(), 0)
+        self.card_box.clear()
+        for c in self.lo["cards"]:
+            self.card_box.addItem(layout.card_title(self.tab, c) + ("" if c["dash"] else "  (hidden)"))
+        self.card_box.setCurrentIndex(min(i, len(self.lo["cards"]) - 1))
+        self._loading = False
+        self._card_changed()
+
+    def _card_changed(self, *_):
+        if self._loading:
+            return
+        card = self.card()
+        if not card:
+            return
+        self._loading = True
+        self.card_title.setText(card.get("title", ""))
+        self.card_title.setPlaceholderText(layout.card_title(self.tab, dict(card, title="")))
+        self.card_dash.setChecked(card["dash"])
+        self.card_export.setChecked(card["export"])
+        self.card_combine.setChecked(card["combine"])
+        self.del_card.setEnabled(card["id"] not in ("main", "analysis"))
+        self._loading = False
+        self._fill_blocks(0)
+
+    def _item_text(self, b):
+        where = [w for w, on in (("Dashboard", b["dash"]), ("Export", b["export"])) if on]
+        title = b.get("title") or layout.auto_title(self.tab, b)
+        missing = BLOCK_NEEDS_COL(b) and not layout.find_column(self.tab, b.get("column"))
+        kind = layout.BLOCK_TYPES.get(b["type"], (b["type"],))[0]
+        return (f"{title}\n    {kind} · "
+                + ("column missing!" if missing else (" + ".join(where) or "hidden")))
+
+    def _fill_blocks(self, select=None):
+        card = self.card()
+        self._loading = True
+        self.list.clear()
+        for b in card["blocks"] if card else []:
+            item = QListWidgetItem(self._item_text(b))
+            item.setToolTip(layout.describe(self.tab, b))
+            if not (b["dash"] or b["export"]):
+                item.setForeground(QColor(MUTED))
+            self.list.addItem(item)
+        self._loading = False
+        if select is not None and self.list.count():
+            self.list.setCurrentRow(max(0, min(select, self.list.count() - 1)))
+        self._block_selected()
+        self._schedule()
+
+    def _block_selected(self, *_):
+        if self._loading:
+            return
+        b = self.block()
+        self.right.setEnabled(b is not None)
+        if b is None:
+            return
+        self._loading = True
+        self.type_box.setCurrentIndex(max(self.type_box.findData(b["type"]), 0))
+        self.col_box.setCurrentIndex(max(self.col_box.findData(b.get("column")), 0)
+                                     if b.get("column") else 0)
+        self.title_edit.setText(b.get("title", ""))
+        self.title_edit.setPlaceholderText(layout.auto_title(self.tab, dict(b, title="")))
+        self.count_box.setCurrentIndex(max(self.count_box.findData(b.get("count", "rows")), 0))
+        self.which_box.clear()
+        for v, label in self.WHICH.get(b["type"], []):
+            self.which_box.addItem(label, v)
+        if b["type"] in self.WHICH:
+            self.which_box.setCurrentIndex(max(self.which_box.findData(b.get("which")), 0))
+        self.hide_box.setCurrentIndex(max(self.hide_box.findData(b.get("hide_zero", False)), 0))
+        self.sub_colors.setChecked(b.get("colors") == "subsystem" or (
+            "colors" not in b and layout.find_column(self.tab, b.get("column")) is store.fault_column(self.tab)
+            and b.get("column") is not None))
+        chosen = b.get("columns") or []
+        for k in range(self.list_cols.count()):
+            item = self.list_cols.item(k)
+            item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in chosen else Qt.Unchecked)
+        self.new_row.setChecked(b.get("new_row", False))
+        self.b_dash.setChecked(b["dash"])
+        self.b_export.setChecked(b["export"])
+        self._show_fields(b["type"])
+        self._loading = False
+
+    def _show_fields(self, t):
+        needs_col = layout.BLOCK_TYPES[t][1]
+        show = {self.col_box: needs_col,
+                self.count_box: t in ("status", "pie", "bars", "count", "tally", "days", "list")
+                and store.is_run_tab(self.tab),
+                self.which_box: t in self.WHICH,
+                self.hide_box: t == "tally",
+                self.sub_colors: t == "pie",
+                self.list_cols: t == "list"}
+        for w, on in show.items():
+            w.setVisible(on)
+            label = self.form.labelForField(w)
+            if label:
+                label.setVisible(on)
+        self.help_lbl.setText(layout.BLOCK_TYPES[t][2])
+
+    def _schedule(self):
+        self.preview_timer.start(150)
+
+    def _draw_preview(self):
+        card = self.card()
+        if not card:
+            return
+        try:
+            w = self.win.dashboard._card(self.tab, dict(card, dash=True), self.lo, preview=True)
+        except Exception as exc:
+            w = _small_label(f"Couldn't draw the preview: {type(exc).__name__}: {exc}", RED)
+        box = QWidget()
+        box.setObjectName("dash")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 8, 0)
+        v.addWidget(w)
+        v.addStretch(1)
+        self.preview.setWidget(box)
+
+    # ── edits ─────────────────────────────────────────────────────────────────
+
+    def _card_edited(self, *_):
+        card = self.card()
+        if self._loading or not card:
+            return
+        card["title"] = self.card_title.text().strip()
+        card["dash"] = self.card_dash.isChecked()
+        card["export"] = self.card_export.isChecked()
+        card["combine"] = self.card_combine.isChecked()
+        self._loading = True
+        self.card_box.setItemText(self.card_box.currentIndex(),
+                                  layout.card_title(self.tab, card) + ("" if card["dash"] else "  (hidden)"))
+        self._loading = False
+        self._schedule()
+
+    def _type_changed(self, *_):
+        b = self.block()
+        if self._loading or not b:
+            return
+        t = self.type_box.currentData()
+        b["type"] = t
+        if layout.BLOCK_TYPES[t][1]:
+            col = layout.find_column(self.tab, b.get("column"))
+            if t == "days" and (col is None or col["kind"] != "date"):
+                dcol = store.date_column(self.tab)
+                b["column"] = layout.col_ref(dcol) if dcol else b.get("column")
+            elif col is None:
+                b["column"] = self.col_box.currentData()
+        if t in self.WHICH and b.get("which") not in dict(self.WHICH[t]):
+            b["which"] = self.WHICH[t][0][0]
+        if t == "list" and not b.get("columns"):
+            b["columns"] = [layout.col_ref(c) for c in self.cols[:5]]
+        self._block_selected()
+        self._block_edited()
+
+    def _block_edited(self, *_):
+        b = self.block()
+        if self._loading or not b:
+            return
+        if layout.BLOCK_TYPES[b["type"]][1]:
+            b["column"] = self.col_box.currentData()
+        b["title"] = self.title_edit.text().strip()
+        if self.count_box.isVisible():
+            b["count"] = self.count_box.currentData()
+        if b["type"] in self.WHICH:
+            b["which"] = self.which_box.currentData()
+        if b["type"] == "tally":
+            b["hide_zero"] = self.hide_box.currentData()
+        if b["type"] == "pie":
+            b["colors"] = "subsystem" if self.sub_colors.isChecked() else "category"
+        if b["type"] == "list":
+            b["columns"] = [self.list_cols.item(k).data(Qt.UserRole) for k in range(self.list_cols.count())
+                            if self.list_cols.item(k).checkState() == Qt.Checked]
+        b["new_row"] = self.new_row.isChecked()
+        b["dash"] = self.b_dash.isChecked()
+        b["export"] = self.b_export.isChecked()
+        self.title_edit.setPlaceholderText(layout.auto_title(self.tab, dict(b, title="")))
+        item = self.list.currentItem()
+        if item:
+            item.setText(self._item_text(b))
+            item.setForeground(QColor(INK if (b["dash"] or b["export"]) else MUTED))
+        self._schedule()
+
+    def _add_block(self, t):
+        card = self.card()
+        if not card:
+            return
+        col = None
+        if layout.BLOCK_TYPES[t][1]:
+            pick = store.date_column(self.tab) if t == "days" else (
+                store.component_column(self.tab) if t == "tally" else None)
+            pick = pick or next((c for c in self.cols if c["kind"] == "dropdown" and not c.get("derived")),
+                                self.cols[0] if self.cols else None)
+            col = layout.col_ref(pick) if pick else None
+        b = layout.block(t, col, export=card["export"], new_row=t in ("list", "days", "tally"))
+        if t in self.WHICH:
+            b["which"] = self.WHICH[t][0][0]
+        if t == "list":
+            b["columns"] = [layout.col_ref(c) for c in self.cols[:5]]
+        i = self.list.currentRow() + 1 if self.list.currentRow() >= 0 else len(card["blocks"])
+        card["blocks"].insert(i, b)
+        self._fill_blocks(i)
+
+    def _remove_block(self):
+        card, i = self.card(), self.list.currentRow()
+        if card and 0 <= i < len(card["blocks"]):
+            del card["blocks"][i]
+            self._fill_blocks(i)
+
+    def _move(self, step):
+        card, i = self.card(), self.list.currentRow()
+        j = i + step
+        if card and 0 <= i < len(card["blocks"]) and 0 <= j < len(card["blocks"]):
+            card["blocks"][i], card["blocks"][j] = card["blocks"][j], card["blocks"][i]
+            self._fill_blocks(j)
+
+    def _new_card(self):
+        name, ok = QInputDialog.getText(self, "New card", "Card title:")
+        if not ok or not name.strip():
+            return
+        self.lo["cards"].append({"id": layout.new_id(), "title": name.strip(), "dash": True,
+                                 "export": True, "combine": False, "blocks": []})
+        self._fill_cards()
+        self.card_box.setCurrentIndex(len(self.lo["cards"]) - 1)
+
+    def _delete_card(self):
+        card = self.card()
+        if card and card["id"] not in ("main", "analysis"):
+            self.lo["cards"].remove(card)
+            self.card_box.setCurrentIndex(0)
+            self._fill_cards()
+
+    def _reset(self):
+        reply = QMessageBox.question(self, "Reset to built-in",
+                                     f"Go back to the app's own charts for {self.tab['title']}? "
+                                     "This applies to everyone when you save.",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.lo = layout.default_layout(self.tab, _settings(self.win))
+            self.reset_requested = True
+            self._fill_cards()
+
+    def _copy_from(self):
+        names = [name for name, _ in self.copies]
+        name, ok = QInputDialog.getItem(self, "Copy layout", "Copy this tab's layout from:", names, 0, False)
+        if ok:
+            self.lo = layout.copy_layout(dict(self.copies)[name])
+            self.reset_requested = False
+            self._fill_cards()
+
+    def result_layout(self):
+        """None means "use the built-in default" (reset and nothing changed after)."""
+        lo = dict(self.lo, columns=[c["name"].strip() for c in self.tab["columns"]])
+        if self.reset_requested and layout.dump(lo) == layout.dump(
+                dict(layout.default_layout(self.tab, _settings(self.win)),
+                     columns=lo["columns"])):
+            return None
+        return lo
+
+
+def BLOCK_NEEDS_COL(b):
+    return layout.BLOCK_TYPES.get(b["type"], ("", False))[1]
+
+
+def _fetch_releases():
+    """[{tag, name, date, testing, zip}] newest first, from GitHub (testing builds included)."""
+    import requests          # bundles its own certificates, unlike urllib in the built app
+    r = requests.get(f"https://api.github.com/repos/{REPO}/releases?per_page=50",
+                     headers={"Accept": "application/vnd.github+json"}, timeout=10)
+    r.raise_for_status()
+    out = []
+    for rel in r.json():
+        if rel.get("draft") or not _version_tuple(rel.get("tag_name")):
+            continue
+        zip_url = next((a["browser_download_url"] for a in rel.get("assets", [])
+                        if a["name"].endswith("-mac.zip")), None)
+        if zip_url:
+            out.append({"tag": rel["tag_name"], "date": (rel.get("published_at") or "")[:10],
+                        "testing": bool(rel.get("prerelease")), "zip": zip_url})
+    return sorted(out, key=lambda x: _version_tuple(x["tag"]), reverse=True)
+
+
+class VersionsDialog(QDialog):
+    """Install any published version — to go back to the stable build, or try a testing one."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Versions")
+        self.setMinimumWidth(560)
+        intro = QLabel(f"You have <b>v{APP_VERSION}</b> ({'testing build' if APP_CHANNEL == 'testing' else 'stable'}). "
+                       "Pick a version to install it instead — for example to go back to the stable "
+                       "build if something in a testing build isn't right. Your settings and the "
+                       "sheet aren't affected.")
+        intro.setWordWrap(True)
+        self.list = QListWidget()
+        self.list.setMinimumHeight(260)
+        self.list.addItem("Loading the list of versions from GitHub…")
+        self.list.itemDoubleClicked.connect(lambda *_: self.accept())
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.install = buttons.addButton("Install this version", QDialogButtonBox.AcceptRole)
+        self.install.setObjectName("primary")
+        self.install.setEnabled(False)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        page = QPushButton("Open releases page ↗")
+        page.setObjectName("link")
+        page.clicked.connect(lambda: _open_link(f"https://github.com/{REPO}/releases"))
+        bottom = QHBoxLayout()
+        bottom.addWidget(page)
+        bottom.addStretch(1)
+        bottom.addWidget(buttons)
+        root = QVBoxLayout(self)
+        root.addWidget(intro)
+        root.addWidget(self.list, 1)
+        root.addLayout(bottom)
+        self.releases = []
+        self.task = _Task(_fetch_releases)
+        self.task.signals.done.connect(self._got)
+        self.task.signals.failed.connect(self._failed)
+        win.net_pool.start(self.task)
+
+    def _got(self, releases):
+        self.releases = releases
+        self.list.clear()
+        newest_stable = next((r["tag"] for r in releases if not r["testing"]), None)
+        for r in releases:
+            bits = [r["tag"], "testing build" if r["testing"] else "stable"]
+            if r["tag"] == newest_stable:
+                bits[1] = "latest stable"
+            if _version_tuple(r["tag"]) == _version_tuple(APP_VERSION):
+                bits.append("installed")
+            item = QListWidgetItem(f"{bits[0]}   ·   {' · '.join(bits[1:])}   ·   {r['date']}")
+            item.setData(Qt.UserRole, r)
+            self.list.addItem(item)
+        if not releases:
+            self.list.addItem("No published versions found.")
+        self.list.currentItemChanged.connect(lambda cur, _: self.install.setEnabled(
+            bool(cur and cur.data(Qt.UserRole))))
+
+    def _failed(self, exc):
+        self.list.clear()
+        self.list.addItem(f"Couldn't reach GitHub ({type(exc).__name__}). Try again in a minute, "
+                          "or use the releases page.")
+
+    def chosen(self):
+        item = self.list.currentItem()
+        return item.data(Qt.UserRole) if item else None
 
 
 # ── table model, sorting and filtering ────────────────────────────────────────
@@ -1496,19 +2062,21 @@ class TabPage(QWidget):
 # ── dashboard ─────────────────────────────────────────────────────────────────
 
 class ExportDialog(QDialog):
-    """Pick the dates and where to save; saves a PNG and a matching PDF."""
+    """Pick the dates, the page style, and which cards and charts go in; saves a PNG
+    (or one per card) and a matching PDF. A preview updates as you change things."""
 
     def __init__(self, win):
         super().__init__(win)
         self.win = win
         self.setWindowTitle("Export snapshot")
-        self.setMinimumWidth(560)
         saved = win.cfg.get("export") or {}
+        self.picks = dict(saved.get("picks") or {})       # only choices that differ from the layouts
+        self.layouts = {t["title"]: win.layout_of(t) for t in win.data["tabs"]}
 
-        intro = QLabel("Saves a one-page snapshot of the end-to-end runs, Error Analysis, and "
-                       "bugs closed in the dates you pick: a <b>PNG</b> to paste into Slack or "
-                       "email, and a matching <b>PDF</b> where run names and bug keys are "
-                       "clickable links.")
+        intro = QLabel("Saves the dashboard's cards for the dates you pick: a <b>PNG</b> to paste "
+                       "into Slack or email, and a matching <b>PDF</b> where run names and bug keys "
+                       "are clickable. Tick what to include; the defaults come from each card's "
+                       "✎ Customize settings.")
         intro.setWordWrap(True)
         self.preset = QComboBox()
         self.preset.addItems([p for p in DATE_PRESETS])
@@ -1527,22 +2095,71 @@ class ExportDialog(QDialog):
         dates.addStretch(1)
         self.preset.currentIndexChanged.connect(self._update)
 
+        self.style = QComboBox()
+        for k, label in export_report.STYLES.items():
+            self.style.addItem(label, k)
+        self.style.setCurrentIndex(max(self.style.findData(saved.get("style", "wide")), 0))
+        self.style.setToolTip("Wide: cards side by side, so Slack shows the picture large.\n"
+                              "Tall: one column, like before.\n"
+                              "One image per card: a separate PNG for each card.")
+        self.style.currentIndexChanged.connect(self._update)
+
         self.folder = saved.get("folder") or os.path.expanduser("~/Downloads")
         self.folder_lbl = QLabel()
-        self.folder_lbl.setMinimumWidth(300)
+        self.folder_lbl.setMinimumWidth(260)
         pick = QPushButton("Choose folder…")
         pick.clicked.connect(self._pick_folder)
         where = QHBoxLayout()
         where.addWidget(self.folder_lbl, 1)
         where.addWidget(pick)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setMinimumHeight(280)
+        self._fill_tree()
+        self.tree.itemChanged.connect(self._tree_changed)
+        defaults = QPushButton("Back to defaults")
+        defaults.setToolTip("Tick exactly what each card's ✎ Customize settings put in the export")
+        defaults.clicked.connect(self._defaults)
+        tree_head = QHBoxLayout()
+        tree_head.addWidget(_small_label("WHAT TO INCLUDE", "#888885", 10))
+        tree_head.addStretch(1)
+        tree_head.addWidget(defaults)
+
         self.summary = _small_label("", MUTED)
         self.summary.setWordWrap(True)
 
         form = QFormLayout()
         form.setSpacing(10)
         form.addRow("Dates", dates)
+        form.addRow("Layout", self.style)
         form.addRow("Save to", where)
-        form.addRow("", self.summary)
+        left = QVBoxLayout()
+        left.setSpacing(10)
+        left.addWidget(intro)
+        left.addLayout(form)
+        left.addLayout(tree_head)
+        left.addWidget(self.tree, 1)
+        left.addWidget(self.summary)
+
+        self.preview = QLabel("Preparing a preview…")
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setStyleSheet(f"color:{MUTED}; background:#FFFFFF; border:1px solid #E0DDD8; "
+                                   "border-radius:8px;")
+        self.preview.setMinimumSize(520, 420)
+        self.preview_note = _small_label("", MUTED)
+        right = QVBoxLayout()
+        right.addWidget(_small_label("PREVIEW", "#888885", 10))
+        right.addWidget(self.preview, 1)
+        right.addWidget(self.preview_note)
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.timeout.connect(self._draw_preview)
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        body.addLayout(left, 1)
+        body.addLayout(right, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
         self.go = buttons.addButton("⬇ Export PNG + PDF", QDialogButtonBox.AcceptRole)
         self.go.setObjectName("primary")
@@ -1550,10 +2167,65 @@ class ExportDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root = QVBoxLayout(self)
         root.setSpacing(12)
-        root.addWidget(intro)
-        root.addLayout(form)
+        root.addLayout(body, 1)
         root.addWidget(buttons)
+        self.resize(1180, 760)
         self._update()
+
+    # ── what to include ───────────────────────────────────────────────────────
+
+    def _fill_tree(self):
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        merged = {}
+        for tab in self.win.data["tabs"]:
+            if not tab["rows"]:
+                continue
+            for card in self.layouts[tab["title"]]["cards"]:
+                if card["combine"] and card["id"] in merged:
+                    item, tabs = merged[card["id"]]
+                    tabs.append(tab)
+                    item.setText(0, export_report.combined_title(card, tabs))
+                    continue
+                ckey = export_report.card_key(tab, card)
+                item = QTreeWidgetItem([layout.card_title(tab, card)])
+                item.setData(0, Qt.UserRole, (ckey, card["export"]))
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.Checked if self.picks.get(ckey, card["export"]) else Qt.Unchecked)
+                f = item.font(0)
+                f.setBold(True)
+                item.setFont(0, f)
+                for b in card["blocks"]:
+                    bkey = export_report.block_key(tab, card, b)
+                    child = QTreeWidgetItem([b.get("title") or layout.auto_title(tab, b)])
+                    child.setToolTip(0, layout.describe(tab, b))
+                    child.setData(0, Qt.UserRole, (bkey, b["export"]))
+                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.Checked if self.picks.get(bkey, b["export"]) else Qt.Unchecked)
+                    item.addChild(child)
+                self.tree.addTopLevelItem(item)
+                item.setExpanded(item.checkState(0) == Qt.Checked)
+                if card["combine"]:
+                    merged[card["id"]] = (item, [tab])
+        self.tree.blockSignals(False)
+
+    def _tree_changed(self, item, _col):
+        key, default = item.data(0, Qt.UserRole)
+        on = item.checkState(0) == Qt.Checked
+        if on == default:
+            self.picks.pop(key, None)
+        else:
+            self.picks[key] = on
+        if item.parent() is None and on:
+            item.setExpanded(True)
+        self._update()
+
+    def _defaults(self):
+        self.picks = {}
+        self._fill_tree()
+        self._update()
+
+    # ── dates, files ──────────────────────────────────────────────────────────
 
     def rng(self):
         return range_for(self.preset.currentText(), _qdate(self.start), _qdate(self.end))
@@ -1582,29 +2254,63 @@ class ExportDialog(QDialog):
             self.folder = folder
             self._update()
 
+    def snapshot(self):
+        return export_report.Snapshot(self.win.data, self.rng(), self.label(), _settings(self.win),
+                                      layouts=self.layouts, picks=self.picks, style=self.style.currentData())
+
     def _update(self, *_):
         name = self.preset.currentText()
         self.start.setVisible(name in ("On a date…", "Date range…"))
         self.to_lbl.setVisible(name == "Date range…")
         self.end.setVisible(name == "Date range…")
         short = self.folder.replace(os.path.expanduser("~"), "~", 1)
-        self.folder_lbl.setText(self.folder_lbl.fontMetrics().elidedText(short, Qt.ElideMiddle, 320))
+        self.folder_lbl.setText(self.folder_lbl.fontMetrics().elidedText(short, Qt.ElideMiddle, 300))
         self.folder_lbl.setToolTip(self.folder)
         rng, bits = self.rng(), []
         for tab in self.win.data["tabs"]:
             if store.is_run_tab(tab):
                 n = len(export_report._in_range(tab, rng))
-                bits.append(f"{tab['title'].replace(' End-to-End Tracker', '')}: "
-                            f"{n} run{'s' if n != 1 else ''}")
+                bits.append(f"{blocks.short_name(tab['title'])}: {n} run{'s' if n != 1 else ''}")
             if store.is_bug_tab(tab):
                 made, done = store.created_date_column(tab), store.done_date_column(tab)
                 count = lambda c: sum(store.in_range(r["values"][c["pos"]], rng) for r in _visible_rows(tab)) if c else 0
                 bits.append(f"bugs: {count(made)} new, {count(done)} closed")
-        self.summary.setText(f"{self.label()} · " + " · ".join(bits) +
-                             f"\nFiles: {self.base_name()}.png and .pdf")
+        files = (f"{self.base_name()} - 1 ….png, one per card, and .pdf"
+                 if self.style.currentData() == "cards" else f"{self.base_name()}.png and .pdf")
+        self.summary.setText(f"{self.label()} · " + " · ".join(bits) + f"\nFiles: {files}")
+        self.preview_timer.start(350)
+
+    def _draw_preview(self):
+        try:
+            snap = self.snapshot()
+            img = snap.image()
+        except Exception as exc:
+            self.preview.setPixmap(QPixmap())
+            self.preview.setText(f"Couldn't draw the preview:\n{type(exc).__name__}: {exc}")
+            return
+        if not snap.cards:
+            self.preview.setPixmap(QPixmap())
+            self.preview.setText("Nothing ticked to export.")
+            self.preview_note.setText("")
+            return
+        pm = QPixmap.fromImage(img)
+        box = self.preview.size()
+        pm.setDevicePixelRatio(1)
+        self.preview.setPixmap(pm.scaled(box.width() - 12, box.height() - 12,
+                                         Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        n = len(snap.cards)
+        self.preview_note.setText(f"{snap.width} × {snap.page_h} px · {n} card{'s' if n != 1 else ''}"
+                                  + (" · each card is saved as its own PNG"
+                                     if self.style.currentData() == "cards" else ""))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, "preview_timer"):
+            self.preview_timer.start(250)
 
     def accept(self):
-        self.win.cfg["export"] = {"preset": self.preset.currentText(), "folder": self.folder}
+        self.win.cfg["export"] = {"preset": self.preset.currentText(), "folder": self.folder,
+                                  "style": self.style.currentData(), "picks": self.picks}
         store.save_config(self.win.cfg)
         super().accept()
 
@@ -1843,9 +2549,15 @@ class Dashboard(QScrollArea):
         root.addLayout(tiles)
 
         for tab in tabs:
-            root.addWidget(self._section(tab))
-            if _visible_rows(tab) and (store.fault_column(tab) or store.component_column(tab)):
-                root.addWidget(self._analysis(tab))
+            lo = self.win.layout_of(tab)
+            for card in lo["cards"]:
+                if not card["dash"] or (card["id"] == "analysis" and not _visible_rows(tab)):
+                    continue
+                try:
+                    root.addWidget(self._card(tab, card, lo))
+                except Exception as exc:          # a broken layout shows a note, not a crash
+                    root.addWidget(_small_label(f"Couldn't draw {layout.card_title(tab, card)}: "
+                                                f"{type(exc).__name__}: {exc}", RED))
         root.addStretch(1)
         self.setWidget(body)
         self.body = body
@@ -1892,362 +2604,134 @@ class Dashboard(QScrollArea):
         lay.addWidget(mini)
         return tile
 
-    def _section(self, tab):
-        rows = self._rows(tab)
-        status, colors = _colors_for(tab, rows)
-        card = QFrame()
-        card.setObjectName("card")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(18, 14, 18, 16)
-        lay.setSpacing(10)
+    def _card(self, tab, card, lo, preview=False):
+        """One dashboard card, drawn from its layout (see layout.py). In preview
+        mode (the Customize dialog), clicks don't navigate."""
+        ctx = blocks.Ctx(self.range, self.range_text, export=False, settings=_settings(self.win))
+        frame = QFrame()
+        frame.setObjectName("card")
+        lay_ = QVBoxLayout(frame)
+        lay_.setContentsMargins(18, 14, 18, 16)
+        lay_.setSpacing(10)
         head = QHBoxLayout()
-        t = QLabel(tab["title"])
+        t = QLabel(layout.card_title(tab, card))
         t.setStyleSheet("font-size:15px; font-weight:bold;")
         head.addWidget(t)
-        detail = self._count_note(tab, rows) + (f" · by {status['name']}" if status else "")
-        head.addWidget(_small_label(detail, MUTED), 0, Qt.AlignBottom)
+        head.addWidget(_small_label(blocks.card_note(card, [tab], ctx), MUTED), 0, Qt.AlignBottom)
         head.addStretch(1)
-        open_btn = QPushButton("Open table →")
-        open_btn.setObjectName("link")
-        open_btn.clicked.connect(lambda: self._go(tab["title"]))
-        head.addWidget(open_btn)
-        lay.addLayout(head)
+        if not preview:
+            edit = QPushButton("✎ Customize")
+            edit.setObjectName("link")
+            edit.setToolTip("Choose which charts this card shows, how, and what goes in the export")
+            edit.clicked.connect(lambda: self.win.customize(tab, card["id"]))
+            head.addWidget(edit)
+            open_btn = QPushButton("Open table →")
+            open_btn.setObjectName("link")
+            open_btn.clicked.connect(lambda: self._go(tab["title"]))
+            head.addWidget(open_btn)
+        lay_.addLayout(head)
 
-        if not rows:
-            lay.addWidget(_small_label("No rows in the chosen dates." if self._dated(tab)
-                                       else "Nothing filled in yet.", MUTED))
-            return card
-        if not status:
-            lay.addWidget(_small_label("No status column found, so there's nothing to chart. "
-                                       "Add a dropdown column named “Status” to get charts.", MUTED))
-            return card
+        if not preview and card is lo["cards"][0]:
+            for col in layout.new_columns(tab, lo, self.win.known_columns(tab)):
+                lay_.addWidget(self._new_column_banner(tab, col))
 
-        pos = status["pos"]                       # the derived "status" key
-        st = {id(r): store.row_status(tab, r) for r in rows}
-        counts = Counter(st.values())
-        order = charts.status_order(list(counts), status["options"])
-        done = sum(n for v, n in counts.items() if charts.classify(v) == "done")
-
-        charts_row = QHBoxLayout()
-        charts_row.setSpacing(28)
-        donut = charts.DonutChart()
-        donut.set_data([(v, counts[v], colors.get(v, charts.PENDING)) for v in order],
-                       (f"{round(100 * done / len(rows))}%", "done"))
-        donut.picked.connect(lambda v, t=tab["title"]: self._go(t, {pos: {v}}))
-        charts_row.addWidget(self._titled(status["name"] + " (all, as of now)" if store.is_bug_tab(tab)
-                                          else status["name"], donut), 0, Qt.AlignTop)
-        bug_lists = None
-        if store.is_bug_tab(tab):
-            summary, bug_lists = self._bug_summary(tab, rows, st)
-            charts_row.addWidget(summary, 1, Qt.AlignTop)
-
-        has_data = lambda c: any(r["values"][c["pos"]].strip() for r in rows)
-        pies = [c for c in store.pie_columns(tab, rows, _settings(self.win)) if has_data(c)]
-        issue_rows = store.issues(tab, rows)       # reasons count each repeated issue once
-        for pc in pies:
-            charts_row.addWidget(self._pie(tab, rows if store.is_workflow(pc) else issue_rows, st, pc),
-                                 0, Qt.AlignTop)
-        bars_row = charts_row
-        if pies:                                  # donuts on top, bar charts get their own row
-            charts_row.addStretch(1)
-            lay.addLayout(charts_row)
-            bars_row = QHBoxLayout()
-            bars_row.setSpacing(28)
-
-        for g in store.chart_columns(tab, rows, _settings(self.win), limit=3):
-            groups = defaultdict(Counter)
-            for r in rows:
-                for part in store.parts(g, store.value_of(tab, r, g)):
-                    groups[part.strip()][st[id(r)]] += 1
-            if len(groups) < 2 and "" in groups:
-                continue                       # nobody has filled this column in yet
-            if store.is_version(g):            # newest version first
-                names = (sorted((k for k in groups if k), key=_natural, reverse=True)
-                         + ([""] if "" in groups else []))[:12]
+        target = (lambda t: None) if preview else self._target
+        drawn = []
+        for b in card["blocks"]:
+            if not b["dash"]:
+                continue
+            try:
+                parts = blocks.render(b, [tab], ctx)
+            except Exception as exc:               # one broken chart doesn't take the card down
+                parts = [blocks.Part(layout.auto_title(tab, b),
+                                     f'<span style="color:{MUTED}">Couldn\'t draw this chart '
+                                     f'({html.escape(type(exc).__name__)}: {html.escape(str(exc))})</span>')]
+            if parts:
+                drawn.append((b, parts))
+        if not drawn:
+            if card["id"] == "main" and not ctx.rows(tab):
+                text = "No rows in the chosen dates." if ctx.dated(tab) else "Nothing filled in yet."
+            elif card["id"] == "main" and not store.status_columns(tab) and not lo.get("custom"):
+                text = ("No status column found, so there's nothing to chart. Add a dropdown column "
+                        "named “Status”, or choose charts with ✎ Customize.")
             else:
-                names = sorted(groups, key=lambda k: (k == "", -sum(groups[k].values()), k))[:12]
-            bars = charts.StackedBars()
-            bars.set_data([(n, [(v, groups[n][v], colors.get(v, charts.PENDING)) for v in order])
-                           for n in names], blank=store.blank_label(g))
-            bars.picked.connect(lambda gv, t=tab["title"], gp=g["pos"]:
-                                self._go(t, {gp: {gv[0]}, pos: {gv[1]}}))
-            if g["pos"] == store.PLATFORM:
-                title = "Runs on Coder vs Atlantis"
-            elif store.is_version(g) and store.is_run_tab(tab):
-                title = f"Runs per {g['name']}"
-            else:
-                title = f"{status['name']} by {g['name']}"
-            bars_row.addWidget(self._titled(title, bars), 1, Qt.AlignTop)
-        if bars_row is charts_row:
-            charts_row.addStretch(0)
-        if bars_row.count():
-            lay.addLayout(bars_row)
-        if bug_lists is not None:
-            lay.addWidget(bug_lists)
+                text = "Nothing to show" + (" in the chosen dates." if ctx.dated(tab) else " yet.")
+            lay_.addWidget(_small_label(text, MUTED))
+            return frame
 
-        dcol = store.date_column(tab)
-        if dcol:
-            days = defaultdict(Counter)
-            raw = defaultdict(set)
-            for r in rows:
-                d = store.parse_date(r["values"][dcol["pos"]])
-                if d:
-                    days[d][st[id(r)]] += 1
-                    raw[d].add(r["values"][dcol["pos"]])
-            if days:
-                col_chart = charts.DayColumns()
-                col_chart.set_data([(d, [(v, days[d][v], colors.get(v, charts.PENDING)) for v in order])
-                                    for d in sorted(days)])
-                col_chart.picked.connect(lambda ds, t=tab["title"], dp=dcol["pos"]:
-                                         self._go(t, {dp: raw[ds[0]], pos: {ds[1]}}))
-                lay.addWidget(self._titled(f"Per day ({dcol['name']})", col_chart))
-        return card
+        for row in blocks.rows_of(drawn):
+            parts = [p for _, ps in row for p in ps]
+            texts = [p for p in parts if isinstance(p.content, str)]
+            if len(texts) > 1 and len(texts) == len(parts):     # side-by-side lists wrap
+                flow = _FlowColumns()
+                for p in parts:
+                    flow.add(self._part(tab, p, target))
+                lay_.addWidget(flow)
+                continue
+            h = QHBoxLayout()
+            h.setSpacing(28)
+            for p in parts:
+                h.addWidget(self._part(tab, p, target), 1 if p.wide else 0, Qt.AlignTop)
+            if not any(p.wide for p in parts):
+                h.addStretch(1)
+            lay_.addLayout(h)
+        return frame
 
-    def _bug_summary(self, tab, rows, st):
-        """Next to the bug donut: open / new / closed / in QA, a one-line summary,
-        and short lists of the newest, recently closed, and waiting-in-QA bugs.
-        "New" and "Closed" follow the dashboard's date filter, like the other charts."""
-        today = date.today()
-        period, period_text = self.range, self.range_text
-        made, done_col = store.created_date_column(tab), store.done_date_column(tab)
-        key_col = next((c for c in tab["columns"] if any(r["links"][c["pos"]] for r in rows)),
-                       tab["columns"][0])
-        summary_col = next((c for c in tab["columns"] if "summary" in c["name"].lower()), None)
-        who_col = next((c for c in tab["columns"] if "assign" in c["name"].lower()), None)
-        spos = store.STATUS
-        val = lambda r, c: r["values"][c["pos"]] if c else ""
-        is_done = lambda r: charts.classify(st[id(r)]) == "done" or bool(store.parse_date(val(r, done_col)))
-        is_qa = lambda r: not is_done(r) and "qa" in _words_of(st[id(r)])
+    def _part(self, tab, part, target):
+        c = part.content
+        pick = (lambda payload, p=part: target(p.pick(payload))) if part.pick else None
+        if isinstance(c, list):
+            w = QWidget()
+            v = QVBoxLayout(w)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(6)
+            for sub in c:
+                v.addWidget(self._part(tab, sub, target))
+            v.addStretch(1)
+        elif isinstance(c, str):
+            w = QLabel(c)
+            w.setTextFormat(Qt.RichText)
+            w.setWordWrap(True)
+            w.setStyleSheet("font-size:12px;")
+            w.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            w.linkActivated.connect(lambda href, pk=pick: (pk and pk(href[5:])) if href.startswith("pick:")
+                                    else _open_link(href))
+        else:
+            w = c
+            if pick and hasattr(w, "picked"):
+                w.picked.connect(pick)
+            if pick and hasattr(w, "picked_cb"):
+                w.picked_cb = pick
+        return self._titled(part.title, w) if part.title else w
 
-        open_ = [r for r in rows if not is_done(r)]
-        new = [r for r in rows if made and store.in_range(val(r, made), period)]
-        closed = [r for r in rows if done_col and store.in_range(val(r, done_col), period)]
-        qa = [r for r in rows if is_qa(r)]
-        age = lambda r: (today - store.parse_date(val(r, made))).days if made and store.parse_date(val(r, made)) else None
+    def _target(self, t):
+        """Open what a click on a chart points at."""
+        if not t:
+            return
+        kind, tab, what = t
+        if kind == "filters":
+            self._go(tab["title"], what)
+        else:
+            self._go_rows(tab, what)
 
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
-        lay.addWidget(_small_label(f"NEW AND CLOSED · {period_text.upper()}", "#888885", 10))
-
-        tiles = QHBoxLayout()
-        tiles.setSpacing(10)
-        title = tab["title"]
-        for label, n, color, sub, filters in [
-            ("Open now", len(open_), INK, f"{len(rows) - len(open_)} of {len(rows)} done",
-             {spos: {st[id(r)] for r in open_}}),
-            ("New", len(new), charts.PROGRESS, f"opened · {period_text}",
-             {made["pos"]: {val(r, made) for r in new}} if made else None),
-            ("Closed", len(closed), "#0B7A0B", f"done · {period_text}",
-             {done_col["pos"]: {val(r, done_col) for r in closed}} if done_col else None),
-            ("In QA", len(qa), charts.QA, "waiting on QA now", {spos: {st[id(r)] for r in qa}}),
-        ]:
-            tile = QFrame()
-            tile.setObjectName("tile")
-            tl = QVBoxLayout(tile)
-            tl.setContentsMargins(12, 8, 12, 8)
-            tl.setSpacing(0)
-            tl.addWidget(_small_label(label, "#666663", 11))
-            big = QLabel(str(n))
-            big.setStyleSheet(f"font-size:22px; font-weight:bold; color:{color};")
-            tl.addWidget(big)
-            tl.addWidget(_small_label(sub, MUTED, 10))
-            if filters is not None:
-                tile.setCursor(Qt.PointingHandCursor)
-                tile.setToolTip(f"See these {n} bugs")
-                tile.mousePressEvent = lambda e, f=filters or {spos: {"\0"}}: self._go(title, f)
-            tiles.addWidget(tile, 1)
-        lay.addLayout(tiles)
-
-        net = len(new) - len(closed)
-        first = f"<b>{period_text}:</b> {len(new)} new, {len(closed)} closed"
-        if period is not None:
-            first += f" (net {'+' if net > 0 else ''}{net})"
-        bits = [first, f"{len(open_)} open now", f"{len(qa)} in QA"]
-        oldest = max((r for r in open_ if age(r) is not None), key=age, default=None)
-        if oldest is not None:
-            bits.append(f"oldest open: {self._bug_link(oldest, key_col)} ({_plural_days(age(oldest))})")
-        line = QLabel(" · ".join(bits))
-        line.setTextFormat(Qt.RichText)
-        line.setOpenExternalLinks(True)
-        line.setWordWrap(True)
-        line.setStyleSheet("font-size:12px; color:#1A1A18;")
-        lay.addWidget(line)
-
-        lists = _FlowColumns()                   # full width, under the donut
-        newest = sorted(new, key=lambda r: store.parse_date(val(r, made)) or today, reverse=True)
-        recent = sorted(closed, key=lambda r: store.parse_date(val(r, done_col)) or today, reverse=True)
-        waiting = sorted(qa, key=lambda r: store.parse_date(val(r, made)) or today)
-        for heading, items, extra, color in [
-            ("New", newest, lambda r: st[id(r)], charts.PROGRESS),
-            ("Closed", recent, lambda r: val(r, done_col), "#0B7A0B"),
-            ("In QA", waiting, lambda r: val(r, who_col), charts.QA),
-        ]:
-            lists.add(self._bug_list(heading, items, key_col, summary_col, extra, color))
-        return box, lists
-
-    @staticmethod
-    def _bug_link(r, key_col):
-        key, link = r["values"][key_col["pos"]], r["links"][key_col["pos"]]
-        return f'<a href="{html.escape(link, quote=True)}" style="color:{LINK}">{html.escape(key)}</a>' \
-            if link else html.escape(key)
-
-    def _bug_list(self, heading, items, key_col, summary_col, extra, color, limit=5):
-        rows_html = []
-        for r in items[:limit]:
-            summ = r["values"][summary_col["pos"]] if summary_col else ""
-            summ = summ if len(summ) <= 36 else summ[:34].rstrip() + "…"
-            rows_html.append(f'<tr><td style="padding:3px 10px 3px 0; white-space:nowrap">'
-                             f'{self._bug_link(r, key_col)}</td>'
-                             f'<td style="padding:3px 10px 3px 0; color:#1A1A18; white-space:nowrap">'
-                             f'{html.escape(summ)}</td>'
-                             f'<td style="padding:3px 0; color:#8A8984; white-space:nowrap">'
-                             f'{html.escape(extra(r))}</td></tr>')
-        more = f'<br><span style="color:#8A8984">and {len(items) - limit} more</span>' if len(items) > limit else ""
-        body = (f'<table cellspacing="0">{"".join(rows_html)}</table>{more}' if items
-                else '<span style="color:#8A8984">None</span>')
-        lbl = QLabel(f'<span style="color:{color}; font-weight:bold">●</span> '
-                     f'<b>{html.escape(heading)}</b> <span style="color:#8A8984">({len(items)})</span><br>{body}')
-        lbl.setTextFormat(Qt.RichText)
-        lbl.setOpenExternalLinks(True)
+    def _new_column_banner(self, tab, col):
+        box = QFrame()
+        box.setObjectName("banner")
+        h = QHBoxLayout(box)
+        h.setContentsMargins(12, 6, 8, 6)
+        lbl = QLabel(f"New column <b>{html.escape(col['name'])}</b> — choose how to show it on "
+                     f"the dashboard and in the export.")
         lbl.setStyleSheet("font-size:12px;")
-        lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        return lbl
-
-    def _pie(self, tab, rows, st, col, subsystem=False):
-        """A donut of categories, e.g. "Reason for Error Runs". Rows where the
-        column is blank are left out. Colors are shared across the whole app
-        (one per value, or per subsystem for "Subsystem At Fault")."""
-        counts = Counter(p.strip() for r in rows
-                         for p in store.parts(col, r["values"][col["pos"]]) if p.strip())
-        base = charts.SUBSYSTEM_ORDER if subsystem else col["options"]
-        options = [v for v in base if v in counts] + sorted(v for v in counts if v not in base)
-        palette = {v: charts.subsystem_color(v) if subsystem else charts.category_color(col["name"], v)
-                   for v in options}
-        pie = charts.DonutChart()
-        total = sum(counts.values())
-        unit = "run" if store.is_workflow(col) else ("ticket" if store.is_ticket_tab(tab) else "issue")
-        pie.set_data([(v, counts[v], palette[v]) for v in options if counts[v]],
-                     (str(total), unit if total == 1 else unit + "s"))
-        pie.picked.connect(lambda v, t=tab["title"], p=col["pos"]: self._go(t, {p: {v}}))
-        return self._titled(col["name"], pie)
-
-    def _analysis(self, tab):
-        """Error Analysis card: why runs failed, which subsystem, and a tally of
-        every component (from the dropdown's options) grouped by subsystem."""
-        runs = self._rows(tab)
-        rows = store.issues(tab, runs)            # a chain of continued runs counts once
-        st = {id(r): store.row_status(tab, r) for r in rows}
-        fault, comp = store.fault_column(tab), store.component_column(tab)
-
-
-        card = QFrame()
-        card.setObjectName("card")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(18, 14, 18, 16)
-        lay.setSpacing(10)
-        head = QHBoxLayout()
-        ticket = store.is_ticket_tab(tab)
-        t = QLabel(f"{tab['title']} — " + ("Analysis" if ticket else "Error Analysis"))
-        t.setStyleSheet("font-size:15px; font-weight:bold;")
-        head.addWidget(t)
-        failed = sum(charts.classify(v) in store.FAILED for v in st.values())
-        failed_runs = sum(charts.classify(store.row_status(tab, r)) in store.FAILED for r in runs)
-        note = f"{failed} failed run{'s' if failed != 1 else ''}"
-        if ticket:
-            done = sum(charts.classify(v) == "done" for v in st.values())
-            note = f"{len(rows)} ticket{'s' if len(rows) != 1 else ''} · {len(rows) - done} open"
-        elif failed_runs > failed:
-            note = (f"{failed} issue{'s' if failed != 1 else ''} from {failed_runs} failed runs "
-                    f"(repeats counted once)")
-        if self._dated(tab):
-            note += " · " + self.range_text
-        head.addWidget(_small_label(note + " · blanks are left out", MUTED), 0, Qt.AlignBottom)
-        head.addStretch(1)
-        open_btn = QPushButton("Open table →")
-        open_btn.setObjectName("link")
-        open_btn.clicked.connect(lambda: self._go(tab["title"]))
-        head.addWidget(open_btn)
-        lay.addLayout(head)
-
-        pies = QHBoxLayout()
-        pies.setSpacing(28)
-        has_data = lambda c: any(r["values"][c["pos"]].strip() for r in rows)
-        for pc in store.pie_columns(tab, rows, _settings(self.win)):
-            if not store.is_workflow(pc) and has_data(pc):
-                pies.addWidget(self._pie(tab, rows, st, pc), 0, Qt.AlignTop)
-        if fault and has_data(fault):
-            pies.addWidget(self._pie(tab, rows, st, fault, subsystem=True), 0, Qt.AlignTop)
-        # open issues from earlier days stay visible until they're resolved
-        fixes = store.resolutions(tab, _visible_rows(tab), self.range)
-        if not pies.count() and not (comp and has_data(comp)) and not fixes:
-            lay.addWidget(_small_label("No reasons or subsystems recorded yet"
-                                       + (" in the chosen dates." if self._dated(tab) else "."), MUTED))
-            return card
-        pies.addStretch(1)
-        lay.addLayout(pies)
-
-        if comp:
-            counts = Counter(p.strip() for r in rows
-                             for p in store.component_parts(comp, r["values"][comp["pos"]]))
-            groups = {}
-            for value in list(comp["options"]) + sorted(v for v in counts if v not in comp["options"]):
-                sub, part = store.split_component(value)
-                groups.setdefault(sub, []).append((part or value, counts[value], value))
-            tally = charts.ComponentTally()
-            tally.set_data([(sub, charts.subsystem_color(sub), parts) for sub, parts in groups.items()])
-            tally.picked.connect(lambda v, t=tab["title"], p=comp["pos"]: self._go(t, {p: {v}}))
-            lay.addWidget(self._titled(f"{comp['name']} tally, by subsystem", tally))
-        as_of = min(self.range[1], date.today()) if self.range else None
-        made = charts.resolution_charts(fixes, as_of, noun="ticket" if ticket else "issue")
-        if made:
-            donut, days, summary = made
-            res = store.resolved_column(tab)
-            donut.picked.connect(lambda v, t=tab, f=fixes:
-                                 self._go_rows(t, [e[0] for e in f if (e[1] is not None) == (v == "Resolved")]))
-            row = QHBoxLayout()
-            row.setSpacing(28)
-            if ticket:                    # tickets: their status breakdown, not resolved vs open
-                status, colors = _colors_for(tab, rows)
-                counts = Counter(st.values())
-                order = charts.status_order(list(counts), status["options"] if status else [])
-                status_pie = charts.DonutChart()
-                done = sum(n for v, n in counts.items() if charts.classify(v) == "done")
-                status_pie.set_data([(v, counts[v], colors.get(v, charts.PENDING)) for v in order],
-                                    (f"{round(100 * done / len(rows))}%" if rows else "–", "done"))
-                status_pie.picked.connect(lambda v, t=tab, rs=rows: self._go_rows(
-                    t, [r for r in rs if store.row_status(t, r) == v]))
-                row.addWidget(self._titled(status["name"] if status else "Status", status_pie), 0, Qt.AlignTop)
-                row.addStretch(1)
-            else:
-                row.addWidget(self._titled("Resolved Issues from Failed Runs", donut), 0, Qt.AlignTop)
-                right = QVBoxLayout()
-                right.setSpacing(6)
-                if days is not None:
-                    right.addWidget(self._titled("Days to resolve (run date → Resolved date)", days))
-                note = QLabel(summary)
-                note.setStyleSheet("font-size:12px; color:#1A1A18;")
-                note.setWordWrap(True)
-                right.addWidget(note)
-                right.addStretch(1)
-                row.addLayout(right, 1)
-            lay.addLayout(row)
-            fault = store.fault_column(tab)
-            lists = _FlowColumns()
-            for resolved, title in ((True, "Resolved, by subsystem"), (False, "Unresolved, by subsystem")):
-                by_sub = charts.resolved_by_subsystem(fixes, resolved)
-                if by_sub is None:
-                    continue
-                def open_runs(payload, t=tab, f=fixes, resolved=resolved):
-                    sub, part = payload
-                    self._go_rows(t, [e[0] for e in f if (e[1] is not None) == resolved
-                                      and (e[4] or charts.NOT_RECORDED) == sub and e[5] == part])
-                by_sub.picked.connect(open_runs)
-                lists.add(self._titled(title, by_sub))
-            if lists.items:
-                lay.addWidget(lists)
-        return card
+        h.addWidget(lbl, 1)
+        choose = QPushButton("Choose…")
+        choose.clicked.connect(lambda: self.win.customize(tab, None, add_column=col["name"]))
+        skip = QPushButton("Not needed")
+        skip.setObjectName("link")
+        skip.setToolTip("Hide this note (just for you). You can still add it later in ✎ Customize.")
+        skip.clicked.connect(lambda: self.win.dismiss_column(tab, col["name"]))
+        h.addWidget(choose)
+        h.addWidget(skip)
+        return box
 
     @staticmethod
     def _titled(title, widget):
@@ -2356,7 +2840,7 @@ class TrackerApp(QMainWindow):
         status_row.addWidget(self.update_btn)
         status_row.addSpacing(10)
         status_row.addWidget(self.conn_lbl)
-        version_btn = QPushButton(f"v{APP_VERSION}")
+        version_btn = QPushButton(f"v{APP_VERSION}" + (" testing" if APP_CHANNEL == "testing" else ""))
         version_btn.setObjectName("link")
         version_btn.setStyleSheet(f"color:{MUTED}; font-size:11px; margin-left:6px;")
         version_btn.setCursor(Qt.PointingHandCursor)
@@ -2441,8 +2925,8 @@ class TrackerApp(QMainWindow):
         png, pdf = dlg.paths()
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
-            snap = export_report.Snapshot(self.data, dlg.rng(), dlg.label(), _settings(self))
-            snap.save_png(png)
+            snap = dlg.snapshot()
+            png = snap.save_png(png)[0]
             snap.save_pdf(pdf)
         except Exception as exc:
             QApplication.restoreOverrideCursor()
@@ -2657,6 +3141,64 @@ class TrackerApp(QMainWindow):
                 self.url = ""
                 self._set_conn("none")
 
+    # ── card layouts ──────────────────────────────────────────────────────────
+
+    def layout_of(self, tab):
+        """The tab's card layout: the admin's saved one, or the built-in default."""
+        return layout.layout_for(tab, _settings(self))
+
+    def known_columns(self, tab):
+        """Columns this app has already seen (or been told to ignore) on a tab, so
+        only columns added later get the “New column” note. Kept on this computer."""
+        sheets = self.cfg.setdefault("known_columns", {})
+        known = sheets.setdefault(store.sheet_id(self.url) or self.url, {})
+        key = tab["title"].strip().lower()
+        if key not in known:
+            known[key] = [c["name"].strip() for c in tab["columns"]]
+            store.save_config(self.cfg)
+        return known[key]
+
+    def dismiss_column(self, tab, name):
+        self.known_columns(tab).append(name.strip())
+        store.save_config(self.cfg)
+        self.dashboard.set_data(self.data)
+
+    def layouts_elsewhere(self, tab):
+        """[(release name, layout)] saved for a tab of the same name in other release sheets."""
+        out = []
+        for s in self.cfg["sheets"]:
+            if s["url"] == self.url:
+                continue
+            raw = ((store.load_cache(s["url"]) or {}).get("settings") or {}).get(layout.key_for(tab))
+            if raw:
+                lo = layout.layout_for(tab, {layout.key_for(tab): raw})
+                if lo.get("custom"):
+                    out.append((s.get("title") or s["url"], lo))
+        return out
+
+    def customize(self, tab, card_id=None, add_column=None):
+        tab = next((t for t in self.data["tabs"] if t["title"] == tab["title"]), tab)
+        unlocked = self._admin_unlock(self, "dashboard cards")
+        if not unlocked:
+            return
+        settings, stored = unlocked
+        dlg = CardEditor(self, tab, card_id, add_column)
+        if dlg.exec_() != QDialog.Accepted:
+            if settings.get(store.PASSCODE_KEY) != stored:
+                self._save_settings(settings, "Admin passcode set.")
+            return
+        lo = dlg.result_layout()
+        key = layout.key_for(tab)
+        settings = dict(settings)
+        if lo is None:
+            settings.pop(key, None)
+        else:
+            settings[key] = layout.dump(lo)
+        known = self.known_columns(tab)
+        known += [c["name"].strip() for c in tab["columns"] if c["name"].strip() not in known]
+        store.save_config(self.cfg)
+        self._save_settings(settings, f"Saved the {tab['title']} cards for everyone.")
+
     # ── admin: chart colours ──────────────────────────────────────────────────
 
     def _admin_unlock(self, parent, what):
@@ -2705,7 +3247,7 @@ class TrackerApp(QMainWindow):
         self._save_settings(settings, "Chart colours saved for everyone.")
 
     def open_columns(self, parent=None):
-        unlocked = self._admin_unlock(parent or self, "charts and filters")
+        unlocked = self._admin_unlock(parent or self, "filters")
         if not unlocked:
             return
         settings, stored = unlocked
@@ -2714,7 +3256,7 @@ class TrackerApp(QMainWindow):
             if settings.get(store.PASSCODE_KEY) != stored:
                 self._save_settings(settings, "Admin passcode set.")
             return
-        self._save_settings(dlg.result_settings(), "Charts & filters saved for everyone.")
+        self._save_settings(dlg.result_settings(), "Filters saved for everyone.")
 
     def _save_settings(self, settings, msg):
         src = self.source
@@ -2732,6 +3274,13 @@ class TrackerApp(QMainWindow):
         the version number in the bottom-right corner is clicked."""
         def latest():
             import requests          # bundles its own certificates, unlike urllib in the built app
+            if APP_CHANNEL == "testing":         # testing builds also see newer testing builds
+                found = _fetch_releases()
+                if not found:
+                    raise RuntimeError("no release found")
+                self._latest_zip = found[0]["zip"]
+                return found[0]["tag"]
+            self._latest_zip = None
             try:
                 r = requests.get(f"https://api.github.com/repos/{REPO}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json"}, timeout=8)
@@ -2790,10 +3339,34 @@ class TrackerApp(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if reply != QMessageBox.Yes:
             return
-        subprocess.Popen(["/bin/bash", "-c", INSTALL_CMD], start_new_session=True,
+        self._run_installer(getattr(self, "_latest_zip", None))
+
+    def _run_installer(self, zip_url=None):
+        """Download and install a release (the newest stable one unless zip_url is given);
+        the app closes, updates, and reopens by itself."""
+        env = dict(os.environ)
+        if zip_url:
+            env["TRACKER_ZIP_URL"] = zip_url
+        subprocess.Popen(["/bin/bash", "-c", INSTALL_CMD], start_new_session=True, env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self._set_status("Updating… the app will reopen by itself.")
+        self._set_status("Installing… the app will reopen by itself.")
         QTimer.singleShot(800, QApplication.quit)
+
+    def open_versions(self, parent=None):
+        dlg = VersionsDialog(self)
+        if dlg.exec_() != QDialog.Accepted or not dlg.chosen():
+            return
+        r = dlg.chosen()
+        if not (getattr(sys, "frozen", False) and sys.platform == "darwin"):
+            _open_link(f"https://github.com/{REPO}/releases/tag/{r['tag']}")
+            return
+        reply = QMessageBox.question(
+            parent or self, "Install another version",
+            f"Install {r['tag']} ({'testing build' if r['testing'] else 'stable'}) in place of "
+            f"v{APP_VERSION}?\n\nThe app will close, install it, and reopen by itself in about a minute.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.Yes:
+            self._run_installer(r["zip"])
 
     def closeEvent(self, event):
         self.pool.waitForDone(5000)     # let an in-flight save finish

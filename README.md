@@ -21,16 +21,11 @@ are written straight back to the sheet.
   *This month*, *On a date…*, or a *Date range…*. It narrows every chart and card for tabs that
   have a date column (e.g. the end-to-end run trackers); other tabs show everything. Clicking
   a chart opens the table with the same dates applied. Your choice is remembered.
-- **⬇ Export snapshot**: pick a date range (Today by default) and save a one-page summary
-  as a **PNG** (to paste into Slack or email) and a matching **PDF** (where run names and bug
-  keys are clickable links). It covers:
-  - **End-to-end runs**, for each run tracker: status donut, workflow split, Coder vs Atlantis
-    (trackers that can run on Coder), runs per software version, and the list of runs with
-    their Atlantis links
-  - **Error Analysis**, combined across the run trackers: the reason and subsystem pies, and a
-    tally of the components that had runs, summed over VitalOne, Viking, and any others
-  - **Bugs**: status of all bugs, the open / new / closed / in-QA counts, and the bugs
-    **opened** (blue) and **closed** (green) in the date range
+- **⬇ Export snapshot**: pick a date range (Today by default), tick which cards and charts to
+  include (the defaults come from each card's ✎ Customize settings), and pick a layout:
+  **Wide** (cards side by side, landscape-shaped so Slack shows it large), **Tall** (one
+  column), or **One image per card**. Saves a **PNG** (to paste into Slack or email) and a
+  matching **PDF** (where run names and bug keys are clickable links), with a live preview.
 - **Bug summary** (tabs with *Created* and *Date Done* columns, like *Automated Bug Statuses*):
   cards for **Open now**, **New**, **Closed**, and **In QA**, a one-line summary, and lists of
   the new, closed, and in-QA bugs with clickable Jira keys. *New* and *Closed* follow the
@@ -132,14 +127,39 @@ every time it syncs:
 2. **New tab in the same file**: duplicate a tab and rename it. It shows up by itself on the
    next sync.
 
-## Admin: charts & filters
+## Admin: customize cards (charts, chart types, export)
 
-Click **⚙ Settings → 📊 Charts & filters…** (admin passcode) to choose which columns get a
-**filter** button on their tab, a bar **chart** on the dashboard, and (for dropdowns) their own
-**pie** chart. It lists every column in the
-sheet with its built-in default. Choices are matched by column name, so turning off
-*Patient Name* turns it off on every tab. They're saved in the hidden settings tab and apply
-to everyone. Each tab shows up to 3 side charts.
+Every dashboard card has a **✎ Customize** link (admin passcode). It opens an editor for
+that tab's cards, with a live preview:
+
+- **Charts on this card**: add (**+ Add chart**), remove, and reorder (↑ ↓) what the card shows.
+- **Show as**: the chart type for each one — *Pie chart*, *Status bars, by column*, *Count
+  bars*, *Tally, grouped by subsystem* (for “IA - Coils”-style values), *Per day* (date
+  columns), *List of rows* (pick its columns), plus the special ones: *Status donut*, *Bug
+  summary tiles*, *Bug list*, *Resolved vs not resolved*, *Resolved / unresolved, by subsystem*.
+- **Column**, **Title**, **Count** (every row, or a repeated issue once), **Start a new row**.
+- **Show on the dashboard** / **Include in the export**, per chart and per card. The export
+  draws the very same card, so whatever you change here shows up there too.
+- **+ New card** adds an extra card for the tab (e.g. one just for the export).
+- **In the export, merge with the same card from other tabs** makes one card from several
+  tabs (that's how Error Analysis covers VitalOne + Viking).
+- **Reset this tab to built-in** goes back to the app's own choice. **Copy from another
+  release…** reuses a layout saved in another release sheet for a tab with the same name.
+
+Layouts are saved in the hidden settings tab (`layout:<tab name>`) and apply to everyone.
+Columns are referred to by name, so moving or inserting columns doesn't break them. Tabs
+nobody has customized show the built-in default (what 1.1.x showed).
+
+**New columns**: when a column is added to a tab, its card shows *New column “X” — choose how
+to show it*. **Choose…** opens the editor with a suggested chart already added (a pie for
+reasons/causes, a tally for components, per day for dates, bars for other dropdowns).
+**Not needed** hides the note for you.
+
+## Admin: filters
+
+Click **⚙ Settings → 🔎 Filters…** (admin passcode) to choose which columns get a **filter**
+button on their tab. Choices are matched by column name, so turning off *Patient Name* turns
+it off on every tab. They're saved in the hidden settings tab and apply to everyone.
 
 ## Admin: chart colours
 
@@ -194,6 +214,23 @@ commit, and push a matching tag (e.g. `v1.0.1`). GitHub Actions checks that the 
 builds the app, and attaches it to a GitHub Release. The install line downloads it, and the
 app's **⬆ Update** button installs it.
 
+### Stable and testing builds
+
+`APP_CHANNEL` next to `APP_VERSION` is `"stable"` or `"testing"`. A testing version is
+published as a GitHub **pre-release**: the install line and the ⬆ Update button on stable
+copies never pick it up, so coworkers stay on the stable build. Testing copies are offered
+newer testing *and* stable versions.
+
+- Stable: **v1.1.7** (on `main`). Next stable: **v2.0.0**.
+- Testing: **v1.2.x** (on the `v2` branch) — the 2.0 overhaul while it's being tried out.
+
+**Going back a version:** ⚙ Settings → **Versions…** lists every published version; pick one
+and click **Install this version** (the app closes, installs it, and reopens). Or in Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shivthakar-vital/test-tracking/main/install.sh | TRACKER_ZIP_URL=https://github.com/shivthakar-vital/test-tracking/releases/download/v1.1.7/Test-Tracker-mac.zip bash
+```
+
 **Windows:** run `build_windows.bat` on a Windows PC with Python 3. The app ends up in
 `dist\Test Tracker\Test Tracker.exe`.
 
@@ -231,7 +268,9 @@ To set up a new one (about 10 minutes):
 | `test_tracker.py` | The app: window, dashboard, tables, editing, updates |
 | `tracker_store.py` | Reading and writing the Google Sheet, settings, and the offline cache |
 | `charts.py` | The donut, bar, per-day, and tally charts (drawn with Qt, no extra libraries) |
-| `export_report.py` | The snapshot export: lays out the page and saves the PNG and PDF |
+| `layout.py` | Card layouts: what each card shows, built-in defaults, saved customizations |
+| `blocks.py` | Draws each kind of chart/list in a card, for both the dashboard and the export |
+| `export_report.py` | The snapshot export: arranges the cards and saves the PNG(s) and PDF |
 | `install.sh` | The one-line installer and updater |
 | `build_mac.sh` | Builds the `.app` |
 | `.github/workflows/release.yml` | Builds and publishes a release when a `v*` tag is pushed |

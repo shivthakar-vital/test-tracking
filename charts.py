@@ -92,8 +92,22 @@ def register(data):
             v = r["values"][fault["pos"]].strip()
             if v and v not in subs:
                 subs.append(v)
+        # category colors: pie-style columns, plus any column a card layout draws as a
+        # pie or count bars (so the admin can colour those too)
+        import layout as lay
+        charted = set()
+        try:
+            for card in lay.layout_for(tab, data.get("settings"))["cards"]:
+                for b in card["blocks"]:
+                    if b["type"] in ("pie", "count") and b.get("colors") != "subsystem" \
+                            and not (b.get("column") or "@").startswith("@"):
+                        charted.add(b["column"].strip().lower())
+        except Exception:
+            pass
         for c in tab["columns"]:
-            if store.wants_pie(c):
+            if c is fault or c in store.status_columns(tab):
+                continue
+            if store.wants_pie(c) or c["name"].strip().lower() in charted:
                 vals = cats.setdefault(c["name"].strip().lower(), [])
                 for v in list(c["options"]) + [r["values"][c["pos"]].strip() for r in tab["rows"]]:
                     for part in store.parts(c, v):

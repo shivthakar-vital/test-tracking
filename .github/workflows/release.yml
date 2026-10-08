@@ -29,6 +29,12 @@ jobs:
             exit 1
           fi
 
+      - name: Read release channel
+        id: channel
+        run: |
+          channel="$(sed -n 's/^APP_CHANNEL *= *"\([^"]*\)".*/\1/p' test_tracker.py)"
+          echo "testing=$([ "$channel" = "testing" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       - name: Build app
         run: ./build_mac.sh
 
@@ -44,8 +50,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: Test Tracker ${{ github.ref_name }}
+          name: Test Tracker ${{ github.ref_name }}${{ steps.channel.outputs.testing == 'true' && ' (testing)' || '' }}
           files: dist/Test-Tracker-mac.zip
+          # testing builds are pre-releases: the install line and stable copies' ⬆ Update skip them
+          prerelease: ${{ steps.channel.outputs.testing == 'true' }}
+          make_latest: ${{ steps.channel.outputs.testing != 'true' }}
           body: |
             ## Install (Apple Silicon Mac, about 2 minutes)
 
