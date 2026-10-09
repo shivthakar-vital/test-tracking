@@ -14,7 +14,7 @@ Build a double-clickable app:
     ./build_mac.sh
 """
 
-import html, os, re, subprocess, sys
+import html, json, os, re, subprocess, sys
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 
@@ -2290,8 +2290,27 @@ class ExportDialog(QDialog):
         self.summary = _small_label("", MUTED)
         self.summary.setWordWrap(True)
 
+        self.profile_note = _small_label("", AMBER)
+        self.profile = QComboBox()
+        self.profile.setMinimumWidth(180)
+        self.profile.setToolTip("Saved export settings: dates, layout, folder, what's ticked, and the arrangement")
+        self.profile.currentIndexChanged.connect(self._apply_profile)
+        self.save_profile = QPushButton("Save")
+        self.save_profile.setToolTip("Save the changes to this profile")
+        self.save_profile.clicked.connect(self._save_current)
+        save_as = QPushButton("Save as new…")
+        save_as.clicked.connect(self._save_as)
+        self.delete_profile = QPushButton("Delete")
+        self.delete_profile.clicked.connect(self._delete)
+        prof_row = QHBoxLayout()
+        prof_row.addWidget(self.profile, 1)
+        prof_row.addWidget(self.profile_note)
+        for b in (self.save_profile, save_as, self.delete_profile):
+            prof_row.addWidget(b)
+
         form = QFormLayout()
         form.setSpacing(10)
+        form.addRow("Profile", prof_row)
         form.addRow("Dates", dates)
         form.addRow("Layout", self.style)
         form.addRow("Save to", where)
@@ -2310,6 +2329,7 @@ class ExportDialog(QDialog):
             self.arrange.load(arr, {k: k.split("|")[0] for c in arr.get("columns", []) for k in c.get("cards", [])})
             self.arrange.custom = True
         self.arrange.changed.connect(lambda: self.preview_timer.start(300))
+        self.arrange.changed.connect(self._profile_state)
         self.side_tabs = QTabWidget()
         self.side_tabs.addTab(include, "What to include")
         self.side_tabs.addTab(self.arrange, "Arrange the page")
@@ -2343,8 +2363,121 @@ class ExportDialog(QDialog):
         root.setSpacing(12)
         root.addLayout(body, 1)
         root.addWidget(buttons)
-        self.resize(1180, 760)
+        self.resize(1180, 800)
+        self._fill_profiles(saved.get("profile", self.DEFAULT_PROFILE))   # last used, as you left it
         self._update()
+
+    # ── profiles ──────────────────────────────────────────────────────────────
+    # A profile is a saved set of export settings (dates, layout, folder, what's
+    # ticked, the page arrangement). "Default" is the built-in settings and can't be
+    # changed; the others are kept on this computer.
+
+    DEFAULT_PROFILE = "Default"
+
+    def _profiles(self):
+        return self.win.cfg.setdefault("export_profiles", {})
+
+    def _default_settings(self):
+        return {"preset": "Today", "style": "wide", "picks": {}, "arrangement": None,
+                "folder": self.folder}
+
+    def current_settings(self):
+        return {"preset": self.preset.currentText(), "style": self.style.currentData(),
+                "picks": dict(self.picks), "folder": self.folder,
+                "arrangement": self.arrange.arrangement() if self.arrange.custom else None}
+
+    def _profile_settings(self, name):
+        if name == self.DEFAULT_PROFILE:
+            return self._default_settings()
+        return self._profiles().get(name)
+
+    def _fill_profiles(self, select):
+        self.profile.blockSignals(True)
+        self.profile.clear()
+        self.profile.addItem(self.DEFAULT_PROFILE)
+        for name in sorted(self._profiles(), key=str.lower):
+            self.profile.addItem(name)
+        i = self.profile.findText(select)
+        self.profile.setCurrentIndex(max(i, 0))
+        self.profile.blockSignals(False)
+        self._profile_state()
+
+    def _apply_profile(self, *_):
+        p = self._profile_settings(self.profile.currentText())
+        if not p:
+            return
+        self._applying = True
+        self.preset.setCurrentText(p.get("preset", "Today"))
+        self.style.setCurrentIndex(max(self.style.findData(p.get("style", "wide")), 0))
+        self.folder = p.get("folder") or self.folder
+        self.picks = dict(p.get("picks") or {})
+        self._fill_tree()
+        arr = p.get("arrangement")
+        if arr:
+            self.arrange.load(arr, {k: k.split("|")[0] for c in arr.get("columns", []) for k in c.get("cards", [])})
+            self.arrange.custom = True
+        else:
+            self.arrange.custom = False
+        self._applying = False
+        self._update()
+
+    def _same(self, a, b):
+        keys = ("preset", "style", "picks", "arrangement", "folder")
+        norm = lambda s: json.dumps({k: (s or {}).get(k) for k in keys}, sort_keys=True)
+        return norm(a) == norm(b)
+
+    def _profile_state(self, *_):
+        """Show whether the settings still match the chosen profile."""
+        if getattr(self, "_applying", False) or not hasattr(self, "profile"):
+            return
+        name = self.profile.currentText()
+        cur, saved = self.current_settings(), self._profile_settings(name)
+        if name == self.DEFAULT_PROFILE:          # Default doesn't care which folder you use
+            cur = dict(cur, folder=None)
+            saved = dict(saved, folder=None)
+        edited = not self._same(cur, saved)
+        self.profile_note.setText("● edited" if edited else "")
+        self.profile_note.setToolTip("These settings differ from the profile. Save them to the profile, "
+                                     "or save as a new one." if edited else "")
+        self.save_profile.setEnabled(edited and name != self.DEFAULT_PROFILE)
+        self.delete_profile.setEnabled(name != self.DEFAULT_PROFILE)
+
+    def _save_as(self):
+        name, ok = QInputDialog.getText(self, "Save export profile",
+                                        "Profile name (e.g. “EOD – Slack”, “Weekly bugs”):",
+                                        text="" if self.profile.currentText() == self.DEFAULT_PROFILE
+                                        else self.profile.currentText())
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        if name.lower() == self.DEFAULT_PROFILE.lower():
+            QMessageBox.information(self, "Name taken", "“Default” is the built-in profile. Pick another name.")
+            return
+        if name in self._profiles() and QMessageBox.question(
+                self, "Replace profile", f"Replace the “{name}” profile with these settings?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._profiles()[name] = self.current_settings()
+        store.save_config(self.win.cfg)
+        self._fill_profiles(name)
+
+    def _save_current(self):
+        name = self.profile.currentText()
+        if name != self.DEFAULT_PROFILE:
+            self._profiles()[name] = self.current_settings()
+            store.save_config(self.win.cfg)
+            self._profile_state()
+
+    def _delete(self):
+        name = self.profile.currentText()
+        if name == self.DEFAULT_PROFILE:
+            return
+        if QMessageBox.question(self, "Delete profile", f"Delete the “{name}” export profile?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            self._profiles().pop(name, None)
+            store.save_config(self.win.cfg)
+            self._fill_profiles(self.DEFAULT_PROFILE)
+            self._apply_profile()
 
     # ── what to include ───────────────────────────────────────────────────────
 
@@ -2456,6 +2589,7 @@ class ExportDialog(QDialog):
                  }.get(self.style.currentData(), f"{self.base_name()}.png and .pdf")
         self.summary.setText(f"{self.label()} · " + " · ".join(bits) + f"\nFiles: {files}")
         self.preview_timer.start(350)
+        self._profile_state()
 
     def _draw_preview(self):
         try:
@@ -2495,9 +2629,7 @@ class ExportDialog(QDialog):
             self.preview_timer.start(250)
 
     def accept(self):
-        self.win.cfg["export"] = {"preset": self.preset.currentText(), "folder": self.folder,
-                                  "style": self.style.currentData(), "picks": self.picks,
-                                  "arrangement": self.arrange.arrangement() if self.arrange.custom else None}
+        self.win.cfg["export"] = dict(self.current_settings(), profile=self.profile.currentText())
         store.save_config(self.win.cfg)
         super().accept()
 

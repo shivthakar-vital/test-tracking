@@ -31,6 +31,10 @@ are written straight back to the sheet.
     wide page. **One column**, or **One image per card**.
   Saves a **PNG** and a matching **PDF** (run names, bug keys and notes are clickable), with a
   live preview.
+  - **Profiles**: save the whole setup (dates, layout, folder, what's ticked, the arrangement)
+    with **Save as new…** and switch between them from the **Profile** menu. **Default** is the
+    built-in settings and is always there. *● edited* means the settings differ from the chosen
+    profile; **Save** updates it. Profiles are kept on your computer.
 - **Bug summary** (tabs with *Created* and *Date Done* columns, like *Automated Bug Statuses*):
   cards for **Open now**, **New**, **Closed**, and **In QA**, a one-line summary, and lists of
   the new, closed, and in-QA bugs with clickable Jira keys. *New* and *Closed* follow the
