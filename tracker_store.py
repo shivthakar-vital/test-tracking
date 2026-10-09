@@ -278,21 +278,17 @@ def issue_groups(tab, rows=None):
     when = lambda r: (parse_date(r["values"][dcol["pos"]]) if dcol else None) or date.min
     return {k: sorted(v, key=when) for k, v in groups.items()}
 
-_VAGUE = re.compile(r"^\s*(unknown|tbd|n/?a|none|-+|—)\b", re.I)
-
 def merge_issue(tab, rows, prefer=()):
     """One row standing for a chain of runs (`rows`, oldest first). Each cell comes from
     the newest run that has it filled in, since a later run usually has the better
-    diagnosis; runs in `prefer` (e.g. the ones in the date range on screen) come first.
-    Vague values (Unknown / TBD / N/A) are used only if nothing else is recorded.
+    diagnosis (an "Unknown / TBD" placeholder on the newest run counts too: it gets
+    updated after investigation). Runs in `prefer` (e.g. those in the date range) come first.
     "_runs" lists every run in the chain, oldest first (its first run has the notes)."""
     preferred = [r for r in reversed(rows) if any(r is p for p in prefer)]
     order = preferred + [r for r in reversed(rows) if not any(r is p for p in preferred)]
     merged = dict(rows[0], values=list(rows[0]["values"]), links=list(rows[0]["links"]))
     for c in tab["columns"]:
-        filled = [r for r in order if r["values"][c["pos"]].strip()]
-        pick = next((r for r in filled if not _VAGUE.match(r["values"][c["pos"]])), None) or \
-            (filled[0] if filled else None)
+        pick = next((r for r in order if r["values"][c["pos"]].strip()), None)
         if pick is not None:
             merged["values"][c["pos"]] = pick["values"][c["pos"]]
             merged["links"][c["pos"]] = pick["links"][c["pos"]]
