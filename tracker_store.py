@@ -278,17 +278,29 @@ def issue_groups(tab, rows=None):
     when = lambda r: (parse_date(r["values"][dcol["pos"]]) if dcol else None) or date.min
     return {k: sorted(v, key=when) for k, v in groups.items()}
 
-def merge_issue(tab, rows):
-    """One row standing for a chain of runs: each cell from the first run that has it
-    filled in. "_runs" lists every run in the chain (for opening them in the table)."""
+_VAGUE = re.compile(r"^\s*(unknown|tbd|n/?a|none|-+|—)\b", re.I)
+
+def merge_issue(tab, rows, prefer=()):
+    """One row standing for a chain of runs (`rows`, oldest first). Each cell comes from
+    the newest run that has it filled in, since a later run usually has the better
+    diagnosis; runs in `prefer` (e.g. the ones in the date range on screen) come first.
+    Vague values (Unknown / TBD / N/A) are used only if nothing else is recorded.
+    "_runs" lists every run in the chain, oldest first (its first run has the notes)."""
+    preferred = [r for r in reversed(rows) if any(r is p for p in prefer)]
+    order = preferred + [r for r in reversed(rows) if not any(r is p for p in preferred)]
     merged = dict(rows[0], values=list(rows[0]["values"]), links=list(rows[0]["links"]))
     for c in tab["columns"]:
-        if not merged["values"][c["pos"]].strip():
-            for r in rows[1:]:
-                if r["values"][c["pos"]].strip():
-                    merged["values"][c["pos"]] = r["values"][c["pos"]]
-                    merged["links"][c["pos"]] = r["links"][c["pos"]]
-                    break
+        filled = [r for r in order if r["values"][c["pos"]].strip()]
+        pick = next((r for r in filled if not _VAGUE.match(r["values"][c["pos"]])), None) or \
+            (filled[0] if filled else None)
+        if pick is not None:
+            merged["values"][c["pos"]] = pick["values"][c["pos"]]
+            merged["links"][c["pos"]] = pick["links"][c["pos"]]
+    first = rows[0]                        # the issue is named after (and dated by) its first run
+    for c in ([tab["columns"][0]] if tab["columns"] else []) + [run_name_column(tab), date_column(tab)]:
+        if c is not None:
+            merged["values"][c["pos"]] = first["values"][c["pos"]]
+            merged["links"][c["pos"]] = first["links"][c["pos"]]
     merged["_runs"] = rows
     return merged
 
@@ -307,7 +319,8 @@ def issues(tab, rows):
             out.append(r)
         elif k not in seen:
             seen.add(k)
-            out.append(merge_issue(tab, groups[k]) if len(groups[k]) > 1 else r)
+            out.append(merge_issue(tab, groups[k], prefer=[x for x in groups[k] if any(x is y for y in rows)])
+                       if len(groups[k]) > 1 else r)
     return out
 
 def resolutions(tab, rows, rng=None):
@@ -339,7 +352,10 @@ def resolutions(tab, rows, rng=None):
         failed = [r for r in chain if charts.classify(row_status(tab, r)) in FAILED]
         if not failed:
             continue
-        r = merge_issue(tab, chain) if len(chain) > 1 else chain[0]
+        # for a past date range, what was known by its last day comes first
+        known = [x for x in chain if rng is None or (parse_date(x["values"][dcol["pos"]]) if dcol else None)
+                 and parse_date(x["values"][dcol["pos"]]) <= rng[1]]
+        r = merge_issue(tab, chain, prefer=known) if len(chain) > 1 else chain[0]
         ran = parse_date(chain[0]["values"][dcol["pos"]]) if dcol else None    # first run of the issue
         fixes = [parse_date(x["values"][res["pos"]]) for x in failed]
         fixed = max(fixes) if all(fixes) else None           # resolved once every run in it is
