@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QTabWidget, QScrollArea, QStyledItemDelegate, QDateEdit, QMenu,
     QToolButton, QWidgetAction, QListWidget, QListWidgetItem, QPlainTextEdit,
     QAbstractItemView, QListView, QSizePolicy, QColorDialog, QInputDialog, QTreeWidget,
-    QTreeWidgetItem
+    QTreeWidgetItem, QSplitter
 )
 from PyQt5.QtCore import (
     Qt, QObject, QRunnable, QThreadPool, QTimer, QUrl, QDate, pyqtSignal,
@@ -2082,6 +2082,145 @@ class TabPage(QWidget):
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
 
+class ArrangePanel(QWidget):
+    """The export page's columns, as lists you can drag cards between. Drag the
+    dividers to make a column wider or narrower. `changed` fires on every edit."""
+    changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.custom = False
+        self._loading = False
+        help_ = _small_label("Drag cards between columns and up or down. Drag the dividers between "
+                             "columns to change their width. Columns always end flush, so there are "
+                             "no gaps.", MUTED)
+        help_.setWordWrap(True)
+        add = QPushButton("+ Column")
+        add.clicked.connect(self._add_column)
+        tidy = QPushButton("Remove empty columns")
+        tidy.clicked.connect(self._tidy)
+        auto = QPushButton("Auto-arrange")
+        auto.setToolTip("Let the app arrange the cards (balanced columns, wide page)")
+        auto.clicked.connect(self._auto)
+        self.page_w = QComboBox()
+        for w in (1400, 1800, 2200, 2600, 3000, 3600):
+            self.page_w.addItem(f"{w} px wide", w)
+        self.page_w.setToolTip("Page width. Wider pages fit more columns side by side.")
+        self.page_w.currentIndexChanged.connect(self._edited)
+        row = QHBoxLayout()
+        for w in (add, tidy, auto):
+            row.addWidget(w)
+        row.addStretch(1)
+        row.addWidget(self.page_w)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(12)
+        self.splitter.setStyleSheet("QSplitter::handle { background:#CCCCC8; margin:60px 4px; "
+                                    "border-radius:2px; } QSplitter::handle:hover { background:#1D9E75; }")
+        self.splitter.splitterMoved.connect(self._edited)
+        lay_ = QVBoxLayout(self)
+        lay_.setContentsMargins(0, 6, 0, 0)
+        lay_.addWidget(help_)
+        lay_.addLayout(row)
+        lay_.addWidget(self.splitter, 1)
+
+    def _new_list(self):
+        lst = QListWidget()
+        lst.setDragDropMode(QAbstractItemView.DragDrop)
+        lst.setDefaultDropAction(Qt.MoveAction)
+        lst.setSelectionMode(QAbstractItemView.SingleSelection)
+        lst.setWordWrap(True)
+        lst.setSpacing(3)
+        lst.setMinimumWidth(90)
+        lst.setStyleSheet("QListWidget::item { background:#FFFFFF; border:1px solid #E0DDD8; "
+                          "border-radius:6px; padding:8px; color:#1A1A18; }"
+                          "QListWidget { background:#F0EFEB; }")
+        lst.model().rowsInserted.connect(self._edited)
+        lst.model().rowsRemoved.connect(self._edited)
+        lst.model().rowsMoved.connect(self._edited)
+        return lst
+
+    def lists(self):
+        return [self.splitter.widget(i) for i in range(self.splitter.count())]
+
+    def _clear(self):
+        for lst in self.lists():
+            lst.setParent(None)
+            lst.deleteLater()
+
+    def load(self, arrangement, titles):
+        """Show an arrangement ({"page_width", "columns": [{"share", "cards"}]})."""
+        self._loading = True
+        self._clear()
+        for col in arrangement.get("columns", []):
+            lst = self._new_list()
+            for key in col.get("cards", []):
+                if key in titles:
+                    item = QListWidgetItem(titles[key])
+                    item.setData(Qt.UserRole, key)
+                    lst.addItem(item)
+            self.splitter.addWidget(lst)
+        shares = [max(float(c.get("share") or 1), 0.05) for c in arrangement.get("columns", [])]
+        total = sum(shares) or 1
+        self.splitter.setSizes([int(1000 * s / total) for s in shares])
+        w = int(arrangement.get("page_width") or 1800)
+        i = min(range(self.page_w.count()), key=lambda k: abs(self.page_w.itemData(k) - w))
+        self.page_w.setCurrentIndex(i)
+        self._loading = False
+
+    def sync(self, titles):
+        """Keep a custom arrangement in step with what's ticked: drop unticked cards,
+        add newly ticked ones to the shortest column."""
+        self._loading = True
+        present = set()
+        for lst in self.lists():
+            for k in reversed(range(lst.count())):
+                key = lst.item(k).data(Qt.UserRole)
+                if key not in titles:
+                    lst.takeItem(k)
+                else:
+                    lst.item(k).setText(titles[key])
+                    present.add(key)
+        for key, title in titles.items():
+            if key not in present and self.lists():
+                lst = min(self.lists(), key=lambda l: l.count())
+                item = QListWidgetItem(title)
+                item.setData(Qt.UserRole, key)
+                lst.addItem(item)
+        self._loading = False
+
+    def arrangement(self):
+        sizes = self.splitter.sizes()
+        total = sum(sizes) or 1
+        return {"page_width": self.page_w.currentData(),
+                "columns": [{"share": round(s / total, 4),
+                             "cards": [lst.item(k).data(Qt.UserRole) for k in range(lst.count())]}
+                            for lst, s in zip(self.lists(), sizes)]}
+
+    def _edited(self, *_):
+        if self._loading:
+            return
+        self.custom = True
+        self.changed.emit()
+
+    def _add_column(self):
+        self.splitter.addWidget(self._new_list())
+        n = self.splitter.count()
+        self.splitter.setSizes([1000 // n] * n)
+        self._edited()
+
+    def _tidy(self):
+        for lst in self.lists():
+            if lst.count() == 0 and self.splitter.count() > 1:
+                lst.setParent(None)
+                lst.deleteLater()
+        self._edited()
+
+    def _auto(self):
+        self.custom = False
+        self.changed.emit()
+
+
 class ExportDialog(QDialog):
     """Pick the dates, the page style, and which cards and charts go in; saves a PNG
     (or one per card) and a matching PDF. A preview updates as you change things."""
@@ -2094,11 +2233,9 @@ class ExportDialog(QDialog):
         self.picks = dict(saved.get("picks") or {})       # only choices that differ from the layouts
         self.layouts = {t["title"]: win.layout_of(t) for t in win.data["tabs"]}
 
-        intro = QLabel("Saves the dashboard's cards for the dates you pick. For Slack, post the "
-                       "<b>summary PNG</b> (headline numbers and key charts, readable in the preview) "
-                       "with the <b>PDF</b> (the full report, where run names and bug keys are "
-                       "clickable). Tick what to include; the defaults come from each card's "
-                       "✎ Customize settings.")
+        intro = QLabel("Saves the dashboard's cards for the dates you pick: a <b>PNG</b> for Slack "
+                       "or email and a matching <b>PDF</b> where run names, bug keys and notes are "
+                       "clickable. Tick what to include, and arrange the page your way.")
         intro.setWordWrap(True)
         self.preset = QComboBox()
         self.preset.addItems([p for p in DATE_PRESETS])
@@ -2120,10 +2257,11 @@ class ExportDialog(QDialog):
         self.style = QComboBox()
         for k, label in export_report.STYLES.items():
             self.style.addItem(label, k)
-        self.style.setCurrentIndex(max(self.style.findData(saved.get("style", "slack")), 0))
-        self.style.setToolTip("Slack summary: a 16:9 picture with the headline numbers and key charts,\n"
-                              "readable in Slack's preview, plus the full report (PNG + PDF).\n"
-                              "Full report only: every ticked card in one column.\n"
+        self.style.setCurrentIndex(max(self.style.findData(saved.get("style", "wide")), 0))
+        self.style.setToolTip("Wide: cards in columns — arrange them yourself under “Arrange the page”.\n"
+                              "Slack summary: a 16:9 picture with the headline numbers and key charts,\n"
+                              "plus the wide page.\n"
+                              "One column: every ticked card stacked.\n"
                               "One image per card: a separate PNG for each card.")
         self.style.currentIndexChanged.connect(self._update)
 
@@ -2161,8 +2299,21 @@ class ExportDialog(QDialog):
         left.setSpacing(10)
         left.addWidget(intro)
         left.addLayout(form)
-        left.addLayout(tree_head)
-        left.addWidget(self.tree, 1)
+        include = QWidget()
+        il = QVBoxLayout(include)
+        il.setContentsMargins(0, 6, 0, 0)
+        il.addLayout(tree_head)
+        il.addWidget(self.tree, 1)
+        self.arrange = ArrangePanel()
+        arr = saved.get("arrangement")
+        if arr:
+            self.arrange.load(arr, {k: k.split("|")[0] for c in arr.get("columns", []) for k in c.get("cards", [])})
+            self.arrange.custom = True
+        self.arrange.changed.connect(lambda: self.preview_timer.start(300))
+        self.side_tabs = QTabWidget()
+        self.side_tabs.addTab(include, "What to include")
+        self.side_tabs.addTab(self.arrange, "Arrange the page")
+        left.addWidget(self.side_tabs, 1)
         left.addWidget(self.summary)
 
         self.preview = QLabel("Preparing a preview…")
@@ -2278,8 +2429,10 @@ class ExportDialog(QDialog):
             self._update()
 
     def snapshot(self):
+        arrangement = self.arrange.arrangement() if self.arrange.custom else None
         return export_report.Snapshot(self.win.data, self.rng(), self.label(), _settings(self.win),
-                                      layouts=self.layouts, picks=self.picks, style=self.style.currentData())
+                                      layouts=self.layouts, picks=self.picks, style=self.style.currentData(),
+                                      arrangement=arrangement)
 
     def _update(self, *_):
         name = self.preset.currentText()
@@ -2299,7 +2452,7 @@ class ExportDialog(QDialog):
                 count = lambda c: sum(store.in_range(r["values"][c["pos"]], rng) for r in _visible_rows(tab)) if c else 0
                 bits.append(f"bugs: {count(made)} new, {count(done)} closed")
         files = {"cards": f"{self.base_name()} - 1 ….png (one per card) and .pdf",
-                 "slack": f"{self.base_name()}.png (summary), “… - full report.png” and .pdf"
+                 "slack": f"{self.base_name()}.png (summary), “… - full report.png” (wide page) and .pdf"
                  }.get(self.style.currentData(), f"{self.base_name()}.png and .pdf")
         self.summary.setText(f"{self.label()} · " + " · ".join(bits) + f"\nFiles: {files}")
         self.preview_timer.start(350)
@@ -2312,6 +2465,13 @@ class ExportDialog(QDialog):
             self.preview.setPixmap(QPixmap())
             self.preview.setText(f"Couldn't draw the preview:\n{type(exc).__name__}: {exc}")
             return
+        titles = snap.card_titles()
+        if self.style.currentData() in ("wide", "slack"):
+            if self.arrange.custom:
+                self.arrange.sync(titles)
+            elif snap.arrangement:
+                self.arrange.load(snap.arrangement, titles)
+        self.side_tabs.setTabEnabled(1, self.style.currentData() in ("wide", "slack"))
         if not snap.cards:
             self.preview.setPixmap(QPixmap())
             self.preview.setText("Nothing ticked to export.")
@@ -2323,7 +2483,9 @@ class ExportDialog(QDialog):
         self.preview.setPixmap(pm.scaled(box.width() - 12, box.height() - 12,
                                          Qt.KeepAspectRatio, Qt.SmoothTransformation))
         n = len(snap.cards)
-        note = {"slack": "Slack summary (16:9). The full report is saved next to it, and as the PDF.",
+        note = {"slack": "Slack summary (16:9). The wide page is saved next to it, and as the PDF.",
+                "wide": "Your arrangement." if self.arrange.custom else "Arranged automatically — "
+                        "change it under “Arrange the page”.",
                 "cards": "Each card is saved as its own PNG."}.get(self.style.currentData(), "")
         self.preview_note.setText(f"{n} card{'s' if n != 1 else ''} · {note}")
 
@@ -2334,7 +2496,8 @@ class ExportDialog(QDialog):
 
     def accept(self):
         self.win.cfg["export"] = {"preset": self.preset.currentText(), "folder": self.folder,
-                                  "style": self.style.currentData(), "picks": self.picks}
+                                  "style": self.style.currentData(), "picks": self.picks,
+                                  "arrangement": self.arrange.arrangement() if self.arrange.custom else None}
         store.save_config(self.win.cfg)
         super().accept()
 

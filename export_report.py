@@ -8,11 +8,15 @@ and charts go in is the layout's "In export" choice, which the export dialog can
 change for one export.
 
 What gets saved:
+  • wide  – cards in columns. Arranged automatically (closest to 16:10), or the way
+            you arranged them in the export dialog: which card in which column, and how
+            wide each column is. Columns always end flush, so unticking a card never
+            leaves a hole.
   • slack – a 16:9 summary image (headline numbers + the key donuts) that reads well
-            at Slack's preview size, plus the full report (tall PNG + PDF)
-  • tall  – just the full report: every card in one column (PNG + PDF)
-  • cards – one PNG per card (and the full-report PDF)
-The PDF is always the full report, with clickable links.
+            at Slack's preview size, plus the wide page
+  • tall  – every card in one column
+  • cards – one PNG per card
+The PDF matches the page (with clickable links).
 """
 
 import html, math, re
@@ -34,9 +38,11 @@ INK, INK2, MUTED, LINE = "#1A1A18", "#52514E", "#8A8984", "#E6E4E0"
 PAGE_BG, CARD_BG = "#F5F5F2", "#FFFFFF"
 MARGIN, GAP, PAD = 28, 18, 18   # page margin, space between cards, padding inside a card
 HEADER_H = 64
-STYLES = {"slack": "Slack summary + full report", "tall": "Full report only",
-          "cards": "One image per card"}
-CARD_W = 1100                   # card width in the full report
+STYLES = {"wide": "Wide (arrange it yourself)", "slack": "Slack summary + wide page",
+          "tall": "One column", "cards": "One image per card"}
+CARD_W = 1100                   # card width in the one-column layouts
+WIDE_W = 860                    # card width when the wide layout is arranged automatically
+MIN_COL_W = 480                 # narrowest column the wide layout allows
 
 esc = html.escape
 
@@ -99,8 +105,40 @@ def combined_title(card, tabs):
 
 # ── drawing ───────────────────────────────────────────────────────────────────
 
+def _auto_columns(cards):
+    """Split [(key, height)] into columns (keeping their order within each column):
+    page shape close to 16:10, and columns of nearly equal height, so little space is
+    left empty. Tries every split for up to 8 cards, else fills the shortest column."""
+    import itertools
+    best = None
+    for n in range(1, min(4, max(len(cards), 1)) + 1):
+        choices = itertools.product(range(n), repeat=len(cards)) if len(cards) <= 8 else [None]
+        for assign in choices:
+            cols, tops = [[] for _ in range(n)], [0] * n
+            for i, (k, h) in enumerate(cards):
+                j = assign[i] if assign else tops.index(min(tops))
+                cols[j].append(k)
+                tops[j] += h + GAP
+            if any(not c for c in cols):
+                continue
+            bottom = max(tops)
+            w = 2 * MARGIN + n * WIDE_W + (n - 1) * GAP
+            h = HEADER_H + bottom + 2 * MARGIN
+            empty = sum(bottom - t for t in tops) / (n * bottom)
+            score = abs(math.log((w / h) / 1.6)) + 2.5 * empty
+            if best is None or score < best[0]:
+                best = (score, cols)
+    return best[1] if best else []
+
+
 class Snapshot:
-    def __init__(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="slack"):
+    """arrangement (wide style): {"page_width": px, "columns": [{"share": 1.0, "cards": [card keys]}]}
+    — which cards go in which column, top to bottom, and how wide each column is.
+    Cards it doesn't mention go to the shortest column; columns left empty are dropped,
+    and the last card of each column stretches so the columns end flush."""
+
+    def __init__(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="wide",
+                 arrangement=None):
         self.data, self.rng, self.range_text, self.style = data, rng, range_text, style
         self.settings = settings or {}
         charts.set_overrides(store.color_overrides(self.settings))
@@ -109,20 +147,104 @@ class Snapshot:
             layouts = {t["title"]: lay.layout_for(t, self.settings) for t in data["tabs"]}
         self.ctx = blocks.Ctx(rng, range_text, export=True, settings=self.settings,
                               sheet_url=data.get("url", ""))
-        self.card_w = CARD_W
-        self.cards = []                  # [(title, QTextDocument, {name: QImage})]
         self.kpis, self.donuts = [], []  # for the Slack summary
-        for card, tabs, chosen in plan(data, layouts, picks):
+        self.planned = []
+        for i, (card, tabs, chosen) in enumerate(plan(data, layouts, picks)):
             self.kpis += [(_kind(card, tabs), k) for k in _kpis(card, tabs, self.ctx)]
-            self.cards.append(self._card(card, tabs, chosen))
-        self._arrange()
+            self.planned.append({"key": card_key(tabs[0], card), "card": card, "tabs": tabs,
+                                 "chosen": chosen, "i": i})
+        self.cards = []                  # rendered: {key, title, doc, x, y, w, h, draw_h}
+        if style in ("wide", "slack"):
+            self._arrange_columns(arrangement)
+        else:
+            self._arrange_single()
+
+    def card_titles(self):
+        """{card key: title} for every card going into the export (for the arrange editor)."""
+        return {p["key"]: combined_title(p["card"], p["tabs"]) for p in self.planned}
+
+    # ── page layouts ──────────────────────────────────────────────────────────
+
+    def _render(self, p, width):
+        title, doc = self._card(p["card"], p["tabs"], p["chosen"], width, p["i"])
+        return {"key": p["key"], "title": title, "doc": doc, "w": width,
+                "h": math.ceil(doc.size().height())}
+
+    def _arrange_single(self):
+        y = MARGIN + HEADER_H
+        for p in self.planned:
+            c = self._render(p, CARD_W)
+            c.update(x=MARGIN, y=y, draw_h=c["h"])
+            self.cards.append(c)
+            y += c["h"] + GAP
+        self.width = 2 * MARGIN + CARD_W
+        self.page_h = y - (GAP if self.cards else 0) + MARGIN
+        self.arrangement = None
+
+    def _arrange_columns(self, arrangement):
+        by_key = {p["key"]: p for p in self.planned}
+        cols = []
+        if arrangement and arrangement.get("columns"):
+            page_w = int(arrangement.get("page_width") or 0) or WIDE_W * len(arrangement["columns"])
+            for col in arrangement["columns"]:
+                keys = [k for k in col.get("cards", []) if k in by_key]
+                cols.append({"share": max(float(col.get("share") or 1), 0.05), "keys": keys})
+            placed = {k for c in cols for k in c["keys"]}
+            extra = [p["key"] for p in self.planned if p["key"] not in placed]
+            cols = [c for c in cols if c["keys"]] or ([{"share": 1.0, "keys": []}] if self.planned else [])
+            widths = self._widths(cols, page_w)
+            rendered = {}
+            for c, w in zip(cols, widths):
+                for k in c["keys"]:
+                    rendered[k] = self._render(by_key[k], w)
+            for k in extra:                          # newly ticked cards: the shortest column
+                heights = [sum(rendered[x]["h"] + GAP for x in c["keys"]) for c in cols]
+                j = heights.index(min(heights))
+                rendered[k] = self._render(by_key[k], widths[j])
+                cols[j]["keys"].append(k)
+        else:                                        # automatic
+            rendered = {p["key"]: self._render(p, WIDE_W) for p in self.planned}
+            keys = _auto_columns([(p["key"], rendered[p["key"]]["h"]) for p in self.planned])
+            cols = [{"share": 1.0, "keys": k} for k in keys]
+            widths = [WIDE_W] * len(cols)
+            page_w = 2 * MARGIN + sum(widths) + GAP * max(len(cols) - 1, 0)
+
+        # place, then stretch each column's last card so the columns end flush
+        x, bottoms = MARGIN, []
+        for c, w in zip(cols, widths):
+            y = MARGIN + HEADER_H
+            for k in c["keys"]:
+                card = rendered[k]
+                card.update(x=x, y=y, draw_h=card["h"])
+                self.cards.append(card)
+                y += card["h"] + GAP
+            bottoms.append(y - GAP)
+            x += w + GAP
+        bottom = max(bottoms or [MARGIN + HEADER_H])
+        for c in cols:
+            if c["keys"]:
+                last = rendered[c["keys"][-1]]
+                last["draw_h"] = bottom - last["y"]
+        self.width = max(page_w or 0, x - GAP + MARGIN) if cols else 2 * MARGIN + WIDE_W
+        self.page_h = bottom + MARGIN
+        total = sum(widths) or 1
+        self.arrangement = {"page_width": int(self.width),
+                            "columns": [{"share": round(w / total, 4), "cards": list(c["keys"])}
+                                        for c, w in zip(cols, widths)]}
+        self.cards.sort(key=lambda c: next(p["i"] for p in self.planned if p["key"] == c["key"]))
+
+    @staticmethod
+    def _widths(cols, page_w):
+        avail = page_w - 2 * MARGIN - GAP * (len(cols) - 1)
+        total = sum(c["share"] for c in cols) or 1
+        return [max(MIN_COL_W, int(avail * c["share"] / total)) for c in cols]
 
     # ── one card ──────────────────────────────────────────────────────────────
 
-    def _card(self, card, tabs, chosen):
+    def _card(self, card, tabs, chosen, width, index):
         images = {}
-        inner = self.card_w - 2 * PAD
-        prefix = f"c{len(self.cards)}i"
+        inner = width - 2 * PAD
+        prefix = f"c{index}w{width}i"
 
         def image(widget, width=None):
             widget.setAttribute(Qt.WA_DontShowOnScreen)
@@ -141,12 +263,14 @@ class Snapshot:
             p.end()
             name = f"{prefix}{len(images)}.png"
             images[name] = img
-            return f'<img src="{name}" width="{w}" height="{h}">'
+            return name, f'<img src="{name}" width="{w}" height="{h}">'
 
         def natural(part):
             if part.full:
                 return inner
-            return part.content.width() if isinstance(part.content, charts.DonutChart) else None
+            if isinstance(part.content, charts.DonutChart):
+                return min(part.content.width(), inner)
+            return None
 
         def part_html(part, width):
             label = (f'<span style="font-size:11px; font-weight:bold; color:{MUTED}">'
@@ -157,10 +281,9 @@ class Snapshot:
                                for p in c)
             if isinstance(c, str):
                 return label + c
-            tag = image(c, width)
+            name, tag = image(c, width)
             if isinstance(c, charts.DonutChart):
-                self.donuts.append((_kind(card, tabs), len(self.cards), short, part.title,
-                                    images[f"{prefix}{len(images) - 1}.png"]))
+                self.donuts.append((_kind(card, tabs), index, short, part.title, images[name]))
             return label + tag
 
         title = combined_title(card, tabs)
@@ -182,7 +305,7 @@ class Snapshot:
             dated = any(self.ctx.dated(t) for t in tabs)
             out.append(f'<p style="color:{MUTED}">' + ("Nothing in this date range." if dated
                                                       else "Nothing to show.") + "</p>")
-        MIN_WIDE, SP = 340, 24
+        MIN_WIDE, SP = min(340, inner), 24
         for row in blocks.rows_of(drawn):
             parts = [p for _, ps in row for p in ps]
             # lay the row's parts out in lines that fit the card: fixed-size ones (donuts)
@@ -222,20 +345,10 @@ class Snapshot:
         for name, img in images.items():
             doc.addResource(QTextDocument.ImageResource, QUrl(name), img)
         doc.setHtml("".join(out))
-        doc.setTextWidth(self.card_w)
-        return title, doc, images
+        doc.setTextWidth(width)
+        return title, doc
 
-    # ── page ──────────────────────────────────────────────────────────────────
-
-    def _arrange(self):
-        """The full report: cards stacked in one column."""
-        self.heights = [math.ceil(doc.size().height()) for _, doc, _ in self.cards]
-        self.spots, y = [], MARGIN + HEADER_H
-        for h in self.heights:
-            self.spots.append((MARGIN, y))
-            y += h + GAP
-        self.width = 2 * MARGIN + self.card_w
-        self.page_h = y - (GAP if self.cards else 0) + MARGIN
+    # ── drawing the page ──────────────────────────────────────────────────────
 
     def _synced(self):
         try:
@@ -259,7 +372,7 @@ class Snapshot:
         doc.setTextWidth(width)
         return doc
 
-    def _paint(self, p, cards, spots, width, height):
+    def _paint(self, p, cards, width, height):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.fillRect(QRectF(0, 0, width, height), QColor(PAGE_BG))
@@ -267,42 +380,40 @@ class Snapshot:
         p.translate(MARGIN, MARGIN)
         self._header_doc(width - 2 * MARGIN).drawContents(p)
         p.restore()
-        for (title, doc, _), (x, y) in zip(cards, spots):
-            h = math.ceil(doc.size().height())
+        for c in cards:
             path = QPainterPath()
-            path.addRoundedRect(QRectF(x + 0.5, y + 0.5, self.card_w - 1, h - 1), 10, 10)
+            path.addRoundedRect(QRectF(c["x"] + 0.5, c["y"] + 0.5, c["w"] - 1, c["draw_h"] - 1), 10, 10)
             p.setPen(QPen(QColor(LINE), 1))
             p.setBrush(QColor(CARD_BG))
             p.drawPath(path)
             p.save()
-            p.translate(x, y)
-            doc.drawContents(p, QRectF(0, 0, self.card_w, h))
+            p.translate(c["x"], c["y"])
+            c["doc"].drawContents(p, QRectF(0, 0, c["w"], c["h"]))
             p.restore()
 
-    def image(self, cards=None, spots=None, size=None):
+    def image(self, cards=None, size=None):
         cards = self.cards if cards is None else cards
-        spots = self.spots if spots is None else spots
         w, h = size or (self.width, self.page_h)
         img = QImage(int(w * SCALE), int(h * SCALE), QImage.Format_ARGB32_Premultiplied)
         img.fill(QColor(PAGE_BG))
         p = QPainter(img)
         p.scale(SCALE, SCALE)
-        self._paint(p, cards, spots, w, h)
+        self._paint(p, cards, w, h)
         p.end()
         return img
 
     def single_cards(self):
         """[(title, QImage)] — each card on its own, with the page header."""
         out = []
-        for i, card in enumerate(self.cards):
-            size = (self.card_w + 2 * MARGIN, HEADER_H + self.heights[i] + 2 * MARGIN)
-            out.append((card[0], self.image([card], [(MARGIN, MARGIN + HEADER_H)], size)))
+        for c in self.cards:
+            one = dict(c, x=MARGIN, y=MARGIN + HEADER_H, draw_h=c["h"])
+            out.append((c["title"], self.image([one], (c["w"] + 2 * MARGIN, HEADER_H + c["h"] + 2 * MARGIN))))
         return out
 
     # ── saving ────────────────────────────────────────────────────────────────
 
     def save_png(self, path):
-        """Saves the PNG (or one per card); returns the paths written."""
+        """Saves the PNG (or one per card, or the summary + full page); returns the paths written."""
         if self.style == "slack":
             full = path[:-4] + " - full report.png"
             if not self.summary_image().save(path, "PNG") or not self.image().save(full, "PNG"):
@@ -332,7 +443,7 @@ class Snapshot:
         p = QPainter(printer)
         page = printer.pageRect(QPrinter.DevicePixel)
         p.scale(page.width() / self.width, page.height() / self.page_h)
-        self._paint(p, self.cards, self.spots, self.width, self.page_h)
+        self._paint(p, self.cards, self.width, self.page_h)
         p.end()
 
 # ── Slack summary ─────────────────────────────────────────────────────────────
