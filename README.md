@@ -31,6 +31,8 @@ are written straight back to the sheet.
     wide page. **One column**, or **One image per card**.
   Saves a **PNG** and a matching **PDF** (run names, bug keys and notes are clickable), with a
   live preview.
+  - **One combined Error Analysis (VitalOne + Viking)** (under the list of what to include):
+    untick it to export a separate Error Analysis card for each tracker. Saved with profiles.
   - **Profiles**: save the whole setup (dates, layout, folder, what's ticked, the arrangement)
     with **Save as new…** and switch between them from the **Profile** menu. **Default** is the
     built-in settings and is always there. *● edited* means the settings differ from the chosen

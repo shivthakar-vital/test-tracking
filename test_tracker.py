@@ -2274,6 +2274,7 @@ class ExportDialog(QDialog):
         where.addWidget(self.folder_lbl, 1)
         where.addWidget(pick)
 
+        self.combine_row = QVBoxLayout()
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setMinimumHeight(280)
@@ -2323,6 +2324,7 @@ class ExportDialog(QDialog):
         il.setContentsMargins(0, 6, 0, 0)
         il.addLayout(tree_head)
         il.addWidget(self.tree, 1)
+        il.addLayout(self.combine_row)
         self.arrange = ArrangePanel()
         arr = saved.get("arrangement")
         if arr:
@@ -2484,12 +2486,15 @@ class ExportDialog(QDialog):
     def _fill_tree(self):
         self.tree.blockSignals(True)
         self.tree.clear()
-        merged = {}
+        merged, groups = {}, {}
         for tab in self.win.data["tabs"]:
             if not tab["rows"]:
                 continue
             for card in self.layouts[tab["title"]]["cards"]:
-                if card["combine"] and card["id"] in merged:
+                combine = export_report.combines(card, self.picks)
+                if card["combine"]:
+                    groups.setdefault(card["id"], []).append((tab, card))
+                if combine and card["id"] in merged:
                     item, tabs = merged[card["id"]]
                     tabs.append(tab)
                     item.setText(0, export_report.combined_title(card, tabs))
@@ -2512,9 +2517,35 @@ class ExportDialog(QDialog):
                     item.addChild(child)
                 self.tree.addTopLevelItem(item)
                 item.setExpanded(item.checkState(0) == Qt.Checked)
-                if card["combine"]:
+                if combine:
                     merged[card["id"]] = (item, [tab])
         self.tree.blockSignals(False)
+        # one checkbox per kind of card that can be merged across tabs (e.g. Error Analysis)
+        while self.combine_row.count():
+            w = self.combine_row.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        for cid, members in groups.items():
+            if len(members) < 2:
+                continue
+            tabs = [t for t, _ in members]
+            card = members[0][1]
+            names = " + ".join(blocks.short_name(t["title"]) for t in tabs)
+            what = "Error Analysis" if cid == "analysis" else layout.card_title(tabs[0], card)
+            box = QCheckBox(f"One combined {what} ({names})")
+            box.setToolTip(f"Untick to export a separate {what} card for each of {names}")
+            box.setChecked(export_report.combines(card, self.picks))
+            box.toggled.connect(lambda on, c=card: self._set_combine(c, on))
+            self.combine_row.addWidget(box)
+
+    def _set_combine(self, card, on):
+        key = export_report.COMBINE_PREFIX + card["id"]
+        if on == card["combine"]:
+            self.picks.pop(key, None)
+        else:
+            self.picks[key] = on
+        QTimer.singleShot(0, self._fill_tree)       # not while the checkbox is still signalling
+        self._update()
 
     def _tree_changed(self, item, _col):
         key, default = item.data(0, Qt.UserRole)

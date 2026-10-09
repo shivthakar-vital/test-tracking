@@ -66,6 +66,13 @@ def card_key(tab, card):
 def block_key(tab, card, b):
     return f"{tab['title']}|{card['id']}|{b['id']}"
 
+COMBINE_PREFIX = "combine:"
+
+def combines(card, picks):
+    """Whether this card is merged across tabs in the export: the card's own setting,
+    unless the export dialog says otherwise ("combine:<card id>" in picks)."""
+    return bool((picks or {}).get(COMBINE_PREFIX + card["id"], card["combine"]))
+
 def plan(data, layouts, picks=None):
     """[(card, [tabs], [blocks])] in page order. `layouts`: {tab title: layout}.
     `picks`: {key: bool} from the export dialog, overriding the layouts' choices.
@@ -80,16 +87,17 @@ def plan(data, layouts, picks=None):
         if lo is None:
             continue
         for card in lo["cards"]:
-            if card["combine"] and card["id"] in merged:
+            combine = combines(card, picks)
+            if combine and card["id"] in merged:
                 merged[card["id"]][1].append(tab)
                 continue
             if not on(card_key(tab, card), card["export"]):
-                if card["combine"]:
+                if combine:
                     merged[card["id"]] = (card, [], [])    # others of this kind stay out too
                 continue
             chosen = [b for b in card["blocks"] if on(block_key(tab, card, b), b["export"])]
             entry = (card, [tab], chosen)
-            if card["combine"]:
+            if combine:
                 merged[card["id"]] = entry
             out.append(entry)
     return [e for e in out if e[2]]
