@@ -40,6 +40,8 @@ BLOCK_TYPES = {
     "bug_list":     ("Bug list",                        False, "New, closed, or in-QA bugs"),
     "resolved":     ("Resolved vs not resolved",        False, "With days to resolve and a summary"),
     "by_subsystem": ("Resolved / unresolved, by subsystem", False, "Tally of issues by subsystem"),
+    "sql":          ("Query chart",                     False, "Any SQL query, drawn as a pie, bars, "
+                                                               "per day, or a table"),
 }
 # chart types offered for a column, in menu order
 COLUMN_TYPES = ["pie", "bars", "count", "tally", "days"]
@@ -132,6 +134,8 @@ def auto_title(tab, b):
         return {"new": "New bugs", "closed": "Closed bugs", "qa": "In QA"}.get(b.get("which"), "Bugs")
     if t == "resolved":
         return "Resolved Issues from Failed Runs" if store.is_run_tab(tab) else "Resolved"
+    if t == "sql":
+        return b.get("title") or "Query"
     if t == "by_subsystem":
         return "Resolved, by subsystem" if b.get("which") == "resolved" else "Unresolved, by subsystem"
     return name
@@ -241,6 +245,25 @@ def split_groups(tab, card):
     cols = _version_columns(tab)
     viking = lambda r: any("viking" in r["values"][c["pos"]].lower() for c in cols)
     return [("VitalOne", lambda r: not viking(r)), ("Viking", viking)]
+
+
+def gallery(tab):
+    """[(menu label, new block)]: the app's own charts for this tab, to add back in a click."""
+    out, seen = [], set()
+    for card in default_layout(tab)["cards"]:
+        for b in card["blocks"]:
+            kind = {"status": "donut", "pie": "pie", "bars": "bars", "count": "bars", "tally": "tally",
+                    "days": "per day", "list": "table", "bug_summary": "tiles", "bug_list": "list",
+                    "resolved": "donut and days", "by_subsystem": "tally with notes"
+                    if b.get("which") != "resolved" else "tally"}.get(b["type"], "chart")
+            label = f"{auto_title(tab, b)}  ({kind})"
+            if label in seen:
+                continue
+            seen.add(label)
+            nb = copy.deepcopy(b)
+            nb.update(id=new_id(), dash=True, new_row=False)
+            out.append((label, nb))
+    return out
 
 
 def card_title(tab, card):

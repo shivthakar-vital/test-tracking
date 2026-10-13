@@ -8,7 +8,7 @@ A block can be drawn from several tabs at once (the export's combined Error
 Analysis for VitalOne + Viking): counts are summed and columns matched by name.
 """
 
-import html
+import html, re
 from collections import Counter, defaultdict
 from datetime import date, datetime
 
@@ -27,8 +27,10 @@ GOOD_BG, NEW_BG, DONE_INK = "#E3F4E1", "#E8F1FC", "#0B7A0B"
 class Ctx:
     """What's being drawn: the date range and whether it's for the dashboard or the export."""
 
-    def __init__(self, rng=None, range_text="All dates", export=False, settings=None, sheet_url=""):
+    def __init__(self, rng=None, range_text="All dates", export=False, settings=None, sheet_url="",
+                 data=None):
         self.rng, self.range_text, self.export = rng, range_text, export
+        self.data = data                           # the whole sheet, for SQL charts
         self.sheet_url = sheet_url                 # for links to cells in the export
         self.settings = settings or {}
         self.row_filter = None                     # a split card's section: which rows it shows
@@ -271,6 +273,7 @@ def _days(b, tabs, ctx):
     if not days:
         return None
     order = charts.status_order({s for g in days.values() for s in g}, status["options"] if status else [])
+    legend = _legend(series_vals, colors) if si is not None else None
     chart = charts.DayColumns()
     chart.set_data([(d, [(v, days[d][v], colors.get(v, charts.PROGRESS)) for v in order]) for d in sorted(days)])
 
@@ -669,3 +672,186 @@ def rows_of(items):
             out.append([])
         out[-1].append(item)
     return out
+
+
+# ── query charts ──────────────────────────────────────────────────────────────
+
+def run_query(b, ctx):
+    """(db, columns, rows, ms) for a query block, in this context's dates and section."""
+    import sqldata
+    db = sqldata.for_context(ctx.data, ctx.rng, ctx.row_filter)
+    cols, rows, ms = db.query(b.get("sql") or "")
+    return db, cols, rows, ms
+
+def _query_colors(b, name, values):
+    key = (b.get("color_by") or name or "").strip()
+    low = key.lower()
+    if "status" in low:
+        return charts.status_colors(values)
+    if low in ("subsystem", "subsystem at fault") or b.get("colors") == "subsystem":
+        return {v: charts.subsystem_color(v) for v in values}
+    return {v: charts.category_color(key, v) if v != "(blank)" else charts.PENDING for v in values}
+
+def _refs_pick(db):
+    """Clicking a slice/bar: the rows listed in its _rows cell."""
+    def pick(refs):
+        by_tab = db.rows_for(refs)
+        if not by_tab:
+            return None
+        title, rows = next(iter(by_tab.items()))
+        tab = next(t for t in ctx_tabs(db) if t["title"] == title)
+        return "rows", tab, rows
+    return pick
+
+def ctx_tabs(db):
+    return db.data.get("tabs", [])
+
+def _fmt(v):
+    if isinstance(v, float):
+        return f"{v:.1f}".rstrip("0").rstrip(".")
+    if isinstance(v, str) and len(v) == 10 and v[4] == "-" and v[7] == "-":
+        try:
+            y, m, d = (int(x) for x in v.split("-"))
+            return f"{m}/{d}/{y}"
+        except ValueError:
+            pass
+    return "" if v is None else str(v)
+
+def _query_table(cols, rows, ctx, limit):
+    """HTML for a result table. "<col> link" / "<x>_link" columns become links on their column."""
+    vis = [i for i, c in enumerate(cols) if not c.startswith("_")]
+    link_cols = {i for i in vis if cols[i].endswith(" link") or cols[i].endswith("_link")}
+    link_of = {}
+    for i in vis:
+        if i in link_cols:
+            continue
+        c = cols[i]
+        for cand in (c + " link", c + "_link", re.sub(r"_name$", "", c) + "_link"):
+            if cand in cols and cols.index(cand) in link_cols:
+                link_of[i] = cols.index(cand)
+                break
+    used = set(link_of.values())
+    show = [i for i in vis if i not in used]
+    head = "".join(f'<th align="left" style="color:{MUTED}; font-size:11px; padding:4px 10px 4px 0">'
+                   f'{esc(_friendly(cols[i]))}</th>' for i in show)
+    lines = [f'<table width="100%" cellspacing="0" cellpadding="5"><tr>{head}</tr>']
+    shown = rows[:limit] if limit else rows
+    for k, r in enumerate(shown):
+        cells = []
+        for i in show:
+            text = esc(_fmt(r[i])) or f'<span style="color:{MUTED}">—</span>'
+            href = r[link_of[i]] if i in link_of else (r[i] if i in link_cols else None)
+            if href and isinstance(href, str) and href.startswith("http"):
+                text = f'<a href="{esc(href, quote=True)}" style="color:{LINK}">{text if i not in link_cols else "Open"}</a>'
+            cells.append(f'<td valign="top" style="padding:3px 10px 3px 0">{text}</td>')
+        bg = ' bgcolor="#F7F7F5"' if k % 2 else ""
+        lines.append(f"<tr{bg}>{''.join(cells)}</tr>")
+    lines.append("</table>")
+    if limit and len(rows) > limit:
+        lines.append(f'<span style="color:{MUTED}">and {len(rows) - limit} more · '
+                     f'<a href="pick:all" style="color:{LINK}">open them in the table</a></span>')
+    if not rows:
+        lines = [f'<span style="color:{MUTED}">No rows' + (f' in {esc(ctx.range_text)}' if ctx.rng else "")
+                 + ".</span>"]
+    return "".join(lines)
+
+def _friendly(col):
+    import chartquery
+    return chartquery.friendly(col)
+
+def _sql(b, tabs, ctx):
+    import chartquery
+    title = b.get("title") or "Query"
+    try:
+        db, cols, rows, _ = run_query(b, ctx)
+    except Exception as exc:
+        return [Part(title, f'<span style="color:#A32D2D">Query error: {esc(str(exc))}</span>', wide=True)]
+    kind, li, si, vi = chartquery.shape(cols, rows, b.get("show") or "auto")
+    unit = b.get("unit") or "rows"
+    refs = cols.index("_rows") if "_rows" in cols else None
+    ref_list = lambda r: [x for x in (r[refs] or "").split(",") if x] if refs is not None else []
+
+    if kind == "table":
+        has_rows = "_tab" in cols and "_row" in cols
+        pick = None
+        if has_rows:
+            ti, ri = cols.index("_tab"), cols.index("_row")
+            all_refs = [f"{r[ti]}:{r[ri]}" for r in rows]
+            pick = lambda _, db=db, refs=all_refs: _refs_pick(db)(refs)
+        return [Part(title, _query_table(cols, rows, ctx, None if ctx.export else 25), pick,
+                     wide=True, full=True)]
+    if not rows:
+        return None
+
+    if kind == "pie":
+        values = [str(r[li]) if r[li] is not None else "(blank)" for r in rows]
+        colors = _query_colors(b, cols[li], values)
+        total = sum(r[vi] or 0 for r in rows)
+        pie = charts.DonutChart()
+        word = unit[:-1] if total == 1 and unit.endswith("s") else unit
+        pie.set_data([(v, r[vi] or 0, colors.get(v, charts.PENDING)) for v, r in zip(values, rows)],
+                     (_fmt(total), word))
+        by_label = {v: ref_list(r) for v, r in zip(values, rows)}
+        return [Part(title, pie, lambda v, db=db, m=by_label: _refs_pick(db)(m.get(v, [])))]
+
+    if kind == "bars":
+        groups, order, series_vals, refs_of = {}, [], [], {}
+        for r in rows:
+            g = str(r[li]) if r[li] is not None else "(blank)"
+            s = (str(r[si]) if r[si] is not None else "(blank)") if si is not None else unit.capitalize()
+            if g not in groups:
+                groups[g] = {}
+                order.append(g)
+            groups[g][s] = groups[g].get(s, 0) + (r[vi] or 0)
+            refs_of.setdefault((g, s), []).extend(ref_list(r))
+            if s not in series_vals:
+                series_vals.append(s)
+        if si is not None:
+            colors = _query_colors(b, cols[si], series_vals)
+            if "status" in cols[si].lower():
+                series_vals = charts.status_order(series_vals)
+            data = [(g, [(s, groups[g].get(s, 0), colors.get(s, charts.PENDING)) for s in series_vals])
+                    for g in order[:15]]
+        else:
+            colors = _query_colors(b, cols[li], order)
+            data = [(g, [(series_vals[0], groups[g][series_vals[0]], colors.get(g, charts.PROGRESS))])
+                    for g in order[:15]]
+        bars = charts.StackedBars()
+        bars.set_data(data)
+        pick = lambda gv, db=db, m=refs_of: _refs_pick(db)(m.get(tuple(gv), []))
+        if si is None:
+            return [Part(title, bars, pick, wide=True)]
+        return [Part(title, [Part("", bars, pick, wide=True), Part("", _legend(series_vals, colors))], wide=True)]
+
+    # per day
+    from datetime import date as _d
+    days, series_vals, refs_of = {}, [], {}
+    for r in rows:
+        if not r[li]:
+            continue
+        y, m, dd = (int(x) for x in r[li].split("-"))
+        day = _d(y, m, dd)
+        s = (str(r[si]) if r[si] is not None else "(blank)") if si is not None else unit.capitalize()
+        days.setdefault(day, {})
+        days[day][s] = days[day].get(s, 0) + (r[vi] or 0)
+        refs_of.setdefault((day, s), []).extend(ref_list(r))
+        if s not in series_vals:
+            series_vals.append(s)
+    if si is not None and "status" in cols[si].lower():
+        series_vals = charts.status_order(series_vals)
+    colors = _query_colors(b, cols[si] if si is not None else "", series_vals) if si is not None else \
+        {series_vals[0]: charts.PROGRESS} if series_vals else {}
+    legend = _legend(series_vals, colors) if si is not None else None
+    chart = charts.DayColumns()
+    chart.set_data([(d, [(s, days[d].get(s, 0), colors.get(s, charts.PROGRESS)) for s in series_vals])
+                    for d in sorted(days)])
+    pick = lambda ds, db=db, m=refs_of: _refs_pick(db)(m.get(tuple(ds), []))
+    if legend is None:
+        return [Part(title, chart, pick, wide=True)]
+    return [Part(title, [Part("", chart, pick, wide=True), Part("", legend)], wide=True)]
+
+def _legend(values, colors):
+    return "&nbsp;&nbsp; ".join(f'<span style="color:{colors.get(v, charts.PENDING)}">■</span> '
+                                f'<span style="font-size:11px; color:{INK2}">{esc(v)}</span>' for v in values)
+
+_RENDERERS["sql"] = _sql

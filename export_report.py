@@ -153,7 +153,7 @@ class Snapshot:
         charts.register(data)            # same colors as the dashboard
         if layouts is None:
             layouts = {t["title"]: lay.layout_for(t, self.settings) for t in data["tabs"]}
-        self.ctx = blocks.Ctx(rng, range_text, export=True, settings=self.settings,
+        self.ctx = blocks.Ctx(rng, range_text, export=True, settings=self.settings, data=data,
                               sheet_url=data.get("url", ""))
         self.kpis, self.donuts = [], []  # for the Slack summary
         self.planned = []

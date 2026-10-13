@@ -138,33 +138,43 @@ every time it syncs:
 2. **New tab in the same file**: duplicate a tab and rename it. It shows up by itself on the
    next sync.
 
-## Admin: customize cards (charts, chart types, export)
+## Admin: edit cards (and charts from SQL)
 
-Every dashboard card has a **✎ Customize** link (admin passcode). It opens an editor for
-that tab's cards, with a live preview:
+Click **✎ Edit** on any dashboard card (admin passcode). The card turns into tiles, one per chart:
 
-- **Charts on this card**: add (**+ Add chart**), remove, and reorder (↑ ↓) what the card shows.
-- **Show as**: the chart type for each one — *Pie chart*, *Status bars, by column*, *Count
-  bars*, *Tally, grouped by subsystem* (for “IA - Coils”-style values), *Per day* (date
-  columns), *List of rows* (pick its columns), plus the special ones: *Status donut*, *Bug
-  summary tiles*, *Bug list*, *Resolved vs not resolved*, *Resolved / unresolved, by subsystem*.
-- **Column**, **Title**, **Count** (every row, or a repeated issue once), **Start a new row**.
-- **Show on the dashboard** / **Include in the export**, per chart and per card. The export
-  draws the very same card, so whatever you change here shows up there too.
-- **+ New card** adds an extra card for the tab (e.g. one just for the export).
-- **In the export, merge with the same card from other tabs** makes one card from several
-  tabs (that's how Error Analysis covers VitalOne + Viking).
-- **Reset this tab to built-in** goes back to the app's own choice. **Copy from another
-  release…** reuses a layout saved in another release sheet for a tab with the same name.
+- **Drag ⠿** onto another chart to move a chart there; **drag a chart's right edge** to make it wider
+  or narrower (or use ⋯ → Size).
+- **⋯** on a chart: Edit…, Duplicate, Start a new row, Show on the dashboard, Include in the
+  export, Size, Remove. The line under each tile says where it shows.
+- **+ Add chart** opens the chart form. **Add from gallery** adds back any of the app's own
+  charts (status donut, resolved, unresolved with notes, bug tiles and lists…).
+- **Card settings…**: title, show on the dashboard, include in the export, merge across tabs in
+  the export (Error Analysis), sections (VitalOne / Viking), new card, reset the tab.
+- **Done editing** saves it for everyone (in the sheet's hidden settings tab); **Cancel** throws
+  the changes away.
 
-Layouts are saved in the hidden settings tab (`layout:<tab name>`) and apply to everyone.
-Columns are referred to by name, so moving or inserting columns doesn't break them. Tabs
-nobody has customized show the built-in default (what 1.1.x showed).
+### The chart form: Simple or SQL
 
-**New columns**: when a column is added to a tab, its card shows *New column “X” — choose how
-to show it*. **Choose…** opens the editor with a suggested chart already added (a pie for
-reasons/causes, a tally for components, per day for dates, bars for other dropdowns).
-**Not needed** hides the note for you.
+**Simple** reads like a sentence: *Count* [runs / issues / failed issues / bugs / rows of a tab]
+· *from* [VitalOne, Viking] · *group by* [column] · *split by* [column] · *only where* [filters]
+· *dates* [follow the dashboard / all dates] · *show as* [Pie / Bars / Table / Per day]. It writes
+the SQL for you; the **SQL** tab shows it, and you can change it by hand. The live preview runs the
+query in the dashboard's dates and shows the chart and the result rows.
+
+The sheet is a SQLite database (rebuilt on every sync, in memory):
+
+| Name | What's in it |
+|------|--------------|
+| `"<tab name>"` | every tab, columns by header name, plus `_tab`, `_row` and `"<column> link"` |
+| `runs` | every end-to-end run: `tracker`, `run_number`, `run_name`, `run_link`, `run_date`, `status`, `status_class`, `failed`, `platform`, plus every sheet column |
+| `issues` / `all_issues` | failed or not, a repeated issue once (newest diagnosis wins), in the dates on screen / all dates; `repeats` |
+| `resolutions` | failed issues in the dates on screen with carry-over: `first_date`, `resolved_date`, `days_to_resolve`, `resolved`, `subsystem`, `component`, `carried_over`, `notes` (also Hardware Support Tickets) |
+| `bugs` | `key`, `key_link`, `summary`, `status`, `assignee`, `created`, `done`, `product` (VitalOne / Viking), `is_open`, `in_qa` |
+
+`:start` and `:end` are the dashboard's dates (YYYY-MM-DD). How a result is drawn: `label, n`
+→ pie or bars; `label, series, n` → stacked bars; `day, [series,] n` → per day; anything else →
+a table. Add `GROUP_CONCAT(_tab || ':' || _row) AS _rows` to make slices and bars clickable;
+tables with `_tab, _row` are clickable too. Only `SELECT` queries run.
 
 ## Admin: filters
 
@@ -233,7 +243,9 @@ copies never pick it up, so coworkers stay on the stable build. Testing copies a
 newer testing *and* stable versions.
 
 - Stable: **v1.1.7** (on `main`). Next stable: **v2.0.0**.
-- Testing: **v1.2.x** (on the `v2` branch) — the 2.0 overhaul while it's being tried out.
+- Testing: **v1.2.x** (on the `v2` branch) — the 2.0 overhaul while it's being tried out. v1.2.0 is
+  kept on the `release/1.2.0` branch, and its app in `~/Library/Application Support/TestTracker/builds/`,
+  which **Versions…** lists as "on this Mac" to fall back to.
 
 **Going back a version:** ⚙ Settings → **Versions…** lists every published version; pick one
 and click **Install this version** (the app closes, installs it, and reopens). Or in Terminal:
@@ -281,6 +293,8 @@ To set up a new one (about 10 minutes):
 | `charts.py` | The donut, bar, per-day, and tally charts (drawn with Qt, no extra libraries) |
 | `layout.py` | Card layouts: what each card shows, built-in defaults, saved customizations |
 | `blocks.py` | Draws each kind of chart/list in a card, for both the dashboard and the export |
+| `sqldata.py` | The sheet as an in-memory SQLite database (tables per tab, and the runs/issues/resolutions/bugs views) |
+| `chartquery.py` | Query charts: the Simple form's SQL, and how a query result becomes a chart |
 | `export_report.py` | The snapshot export: arranges the cards and saves the PNG(s) and PDF |
 | `install.sh` | The one-line installer and updater |
 | `build_mac.sh` | Builds the `.app` |
