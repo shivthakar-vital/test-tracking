@@ -189,6 +189,7 @@ def default_layout(tab, settings=None):
                           sort=col_ref(dcol) if dcol else None))
     cards = [{"id": "main", "title": "", "dash": True, "export": run or bug, "combine": False,
               "blocks": main}]
+    cards[0]["split"] = default_split(tab, cards[0])
 
     if fault or comp:
         an = [block("pie", col_ref(c), export=True, count="issues")
@@ -213,6 +214,34 @@ def default_layout(tab, settings=None):
             seen[base] = seen.get(base, 0) + 1
             b["id"] = base if seen[base] == 1 else f"{base}#{seen[base]}"
     return {"cards": cards, "columns": [c["name"].strip() for c in tab["columns"]], "custom": False}
+
+# ── splitting a card into sections ────────────────────────────────────────────
+# A card can be drawn as labelled sections of its rows, all in the same card. Built in:
+# bugs whose Affects or Fix versions mention Viking go under "Viking", the rest under
+# "VitalOne".
+
+SPLITS = {"viking": "VitalOne / Viking (Affects or Fix versions mention Viking)"}
+
+def _version_columns(tab):
+    words = lambda c: store._words(c["name"])
+    return [c for c in tab["columns"] if words(c) & {"version", "versions"}
+            and words(c) & {"affects", "affected", "fix", "fixed"}]
+
+def can_split(tab, how):
+    return how == "viking" and bool(_version_columns(tab))
+
+def default_split(tab, card):
+    return "viking" if card.get("id") == "main" and store.is_bug_tab(tab) and can_split(tab, "viking") else None
+
+def split_groups(tab, card):
+    """[(section name, row test)] for a split card, or None."""
+    how = card.get("split")
+    if not how or not can_split(tab, how):
+        return None
+    cols = _version_columns(tab)
+    viking = lambda r: any("viking" in r["values"][c["pos"]].lower() for c in cols)
+    return [("VitalOne", lambda r: not viking(r)), ("Viking", viking)]
+
 
 def card_title(tab, card):
     if card.get("title"):
@@ -255,7 +284,10 @@ def layout_for(tab, settings=None):
             saved = json.loads(raw)
             if isinstance(saved, dict) and saved.get("cards"):
                 saved["custom"] = True
-                return _clean(saved)
+                saved = _clean(saved)
+                for card in saved["cards"]:          # layouts saved before splits existed
+                    card.setdefault("split", default_split(tab, card))
+                return saved
         except ValueError:
             pass                       # a broken setting falls back to the default
     return default_layout(tab, settings)

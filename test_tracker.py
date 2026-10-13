@@ -703,8 +703,17 @@ class CardEditor(QDialog):
         self.card_combine.setToolTip("e.g. one Error Analysis for VitalOne + Viking")
         for w in (self.card_dash, self.card_export, self.card_combine):
             w.toggled.connect(self._card_edited)
+        self.card_split = QComboBox()
+        self.card_split.addItem("Don't split", None)
+        for how, label in layout.SPLITS.items():
+            if layout.can_split(tab, how):
+                self.card_split.addItem(label, how)
+        self.card_split.setToolTip("Show the card's charts once per section, inside the same card")
+        self.card_split.currentIndexChanged.connect(self._card_edited)
         card_form = QFormLayout()
         card_form.addRow("Title", self.card_title)
+        if self.card_split.count() > 1:
+            card_form.addRow("Sections", self.card_split)
         checks = QHBoxLayout()
         for w in (self.card_dash, self.card_export, self.card_combine):
             checks.addWidget(w)
@@ -890,6 +899,7 @@ class CardEditor(QDialog):
         self.card_dash.setChecked(card["dash"])
         self.card_export.setChecked(card["export"])
         self.card_combine.setChecked(card["combine"])
+        self.card_split.setCurrentIndex(max(self.card_split.findData(card.get("split")), 0))
         self.del_card.setEnabled(card["id"] not in ("main", "analysis"))
         self._loading = False
         self._fill_blocks(0)
@@ -998,6 +1008,7 @@ class CardEditor(QDialog):
         card["dash"] = self.card_dash.isChecked()
         card["export"] = self.card_export.isChecked()
         card["combine"] = self.card_combine.isChecked()
+        card["split"] = self.card_split.currentData()
         self._loading = True
         self.card_box.setItemText(self.card_box.currentIndex(),
                                   layout.card_title(self.tab, card) + ("" if card["dash"] else "  (hidden)"))
@@ -2986,6 +2997,23 @@ class Dashboard(QScrollArea):
                 lay_.addWidget(self._new_column_banner(tab, col))
 
         target = (lambda t: None) if preview else self._target
+        groups = layout.split_groups(tab, card)
+        if not groups:
+            self._card_body(lay_, tab, card, lo, ctx, target)
+            return frame
+        for name, test in groups:                  # labelled sections, same card
+            sub = ctx.section(test)
+            n = len(sub.all_rows(tab))
+            head = QLabel(f"{html.escape(name.upper())} <span style='color:{MUTED}; font-weight:normal'>"
+                          f"· {n} bug{'s' if n != 1 else ''}</span>")
+            head.setTextFormat(Qt.RichText)
+            head.setStyleSheet("font-size:12px; font-weight:bold; color:#1A1A18; padding-top:8px;"
+                               "border-top:1px solid #ECEAE6;")
+            lay_.addWidget(head)
+            self._card_body(lay_, tab, card, lo, sub, target)
+        return frame
+
+    def _card_body(self, lay_, tab, card, lo, ctx, target):
         drawn = []
         for b in card["blocks"]:
             if not b["dash"]:
@@ -3007,7 +3035,7 @@ class Dashboard(QScrollArea):
             else:
                 text = "Nothing to show" + (" in the chosen dates." if ctx.dated(tab) else " yet.")
             lay_.addWidget(_small_label(text, MUTED))
-            return frame
+            return
 
         lines = []
         for row in blocks.rows_of(drawn):
@@ -3037,7 +3065,6 @@ class Dashboard(QScrollArea):
             if not any(p.wide for p in parts):
                 h.addStretch(1)
             lay_.addLayout(h)
-        return frame
 
     def _part(self, tab, part, target):
         c = part.content

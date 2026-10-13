@@ -299,47 +299,57 @@ class Snapshot:
         note = blocks.card_note(card, tabs, self.ctx)
         out = [f'<p style="margin:0 0 4px 0"><b style="font-size:16px; color:{INK}">{esc(title)}</b>'
                f'&nbsp;&nbsp;<span style="font-size:12px; color:{MUTED}">{esc(note)}</span></p>']
-        drawn = []
-        for b in chosen:
-            try:
-                parts = blocks.render(b, tabs, self.ctx)
-            except Exception as exc:                     # one broken chart doesn't stop the export
-                parts = [blocks.Part(lay.auto_title(tabs[0], b),
-                                     f'<span style="color:{MUTED}">Couldn\'t draw this '
-                                     f'({esc(type(exc).__name__)}: {esc(str(exc))})</span>', wide=True)]
-            if parts:
-                drawn.append((b, parts))
-        if not drawn:
-            dated = any(self.ctx.dated(t) for t in tabs)
-            out.append(f'<p style="color:{MUTED}">' + ("Nothing in this date range." if dated
-                                                      else "Nothing to show.") + "</p>")
-        MIN_WIDE, SP = min(340, inner), 24
-        for row in blocks.rows_of(drawn):
-            parts = [p for _, ps in row for p in ps]
-            # lay the row's parts out in lines that fit the card: fixed-size ones (donuts)
-            # keep their width, the others share what's left (at least MIN_WIDE each)
-            lines, cur, used = [], [], 0
-            for p in parts:
-                w = natural(p) or MIN_WIDE
-                if cur and used + SP + w > inner:
+        groups = lay.split_groups(tabs[0], card) if len(tabs) == 1 else None
+        sections = [(None, self.ctx)] if not groups else \
+            [(name, self.ctx.section(test)) for name, test in groups]
+        for section, ctx in sections:
+            if section:                                  # labelled sections, same card
+                n = len(ctx.all_rows(tabs[0]))
+                out.append(f'<p style="margin:16px 0 0 0; font-size:12px; font-weight:bold; color:{INK}">'
+                           f'{esc(section.upper())} <span style="color:{MUTED}; font-weight:normal">'
+                           f'· {n} bug{"s" if n != 1 else ""}</span></p>'
+                           f'<hr style="color:{LINE}">')
+            drawn = []
+            for b in chosen:
+                try:
+                    parts = blocks.render(b, tabs, ctx)
+                except Exception as exc:                     # one broken chart doesn't stop the export
+                    parts = [blocks.Part(lay.auto_title(tabs[0], b),
+                                         f'<span style="color:{MUTED}">Couldn\'t draw this '
+                                         f'({esc(type(exc).__name__)}: {esc(str(exc))})</span>', wide=True)]
+                if parts:
+                    drawn.append((b, parts))
+            if not drawn:
+                dated = any(ctx.dated(t) for t in tabs)
+                out.append(f'<p style="color:{MUTED}">' + ("Nothing in this date range." if dated
+                                                          else "Nothing to show.") + "</p>")
+            MIN_WIDE, SP = min(340, inner), 24
+            for row in blocks.rows_of(drawn):
+                parts = [p for _, ps in row for p in ps]
+                # lay the row's parts out in lines that fit the card: fixed-size ones (donuts)
+                # keep their width, the others share what's left (at least MIN_WIDE each)
+                lines, cur, used = [], [], 0
+                for p in parts:
+                    w = natural(p) or MIN_WIDE
+                    if cur and used + SP + w > inner:
+                        lines.append(cur)
+                        cur, used = [], 0
+                    cur.append(p)
+                    used += (SP if used else 0) + w
+                if cur:
                     lines.append(cur)
-                    cur, used = [], 0
-                cur.append(p)
-                used += (SP if used else 0) + w
-            if cur:
-                lines.append(cur)
-            for line in lines:
-                fixed = sum(natural(p) or 0 for p in line)
-                wide = [p for p in line if natural(p) is None]
-                spare = inner - fixed - SP * (len(line) - 1)
-                cells = []
-                for i, p in enumerate(line):
-                    w = natural(p) or max(MIN_WIDE, spare // max(len(wide), 1))
-                    pad = SP if i < len(line) - 1 else 0
-                    cells.append(f'<td valign="top" width="{int(w) + pad}" style="padding-right:{pad}px">'
-                                 f'{part_html(p, w)}</td>')
-                out.append(f'<table cellspacing="0" cellpadding="0" style="margin-top:12px"><tr>'
-                           f'{"".join(cells)}</tr></table>')
+                for line in lines:
+                    fixed = sum(natural(p) or 0 for p in line)
+                    wide = [p for p in line if natural(p) is None]
+                    spare = inner - fixed - SP * (len(line) - 1)
+                    cells = []
+                    for i, p in enumerate(line):
+                        w = natural(p) or max(MIN_WIDE, spare // max(len(wide), 1))
+                        pad = SP if i < len(line) - 1 else 0
+                        cells.append(f'<td valign="top" width="{int(w) + pad}" style="padding-right:{pad}px">'
+                                     f'{part_html(p, w)}</td>')
+                    out.append(f'<table cellspacing="0" cellpadding="0" style="margin-top:12px"><tr>'
+                               f'{"".join(cells)}</tr></table>')
 
         doc = QTextDocument()
         font = QFont()

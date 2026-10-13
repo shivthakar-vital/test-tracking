@@ -31,9 +31,18 @@ class Ctx:
         self.rng, self.range_text, self.export = rng, range_text, export
         self.sheet_url = sheet_url                 # for links to cells in the export
         self.settings = settings or {}
+        self.row_filter = None                     # a split card's section: which rows it shows
+
+    def section(self, test):
+        """A copy of this context that only sees the rows passing `test`."""
+        import copy
+        c = copy.copy(self)
+        c.row_filter = test
+        return c
 
     def all_rows(self, tab):
-        return [r for r in tab["rows"] if not store.is_blank(r)]
+        rows = [r for r in tab["rows"] if not store.is_blank(r)]
+        return [r for r in rows if self.row_filter(r)] if self.row_filter else rows
 
     def dated(self, tab):
         return self.rng is not None and store.date_column(tab) is not None
