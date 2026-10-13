@@ -73,12 +73,20 @@ def combines(card, picks):
     unless the export dialog says otherwise ("combine:<card id>" in picks)."""
     return bool((picks or {}).get(COMBINE_PREFIX + card["id"], card["combine"]))
 
-def plan(data, layouts, picks=None):
+def plan(data, layouts, picks=None, entries=None):
     """[(card, [tabs], [blocks])] in page order. `layouts`: {tab title: layout}.
     `picks`: {key: bool} from the export dialog, overriding the layouts' choices.
     Cards marked "combine" (e.g. Error Analysis) are merged across tabs."""
     picks = picks or {}
     on = lambda key, default: picks.get(key, default)
+    if entries is not None:                       # a custom view: its cards, in its order
+        out = []
+        for tab, card, lo, e in entries:
+            if on(card_key(tab, card), card["export"]):
+                chosen = [b for b in card["blocks"] if on(block_key(tab, card, b), b["export"])]
+                if chosen:
+                    out.append((card, [tab], chosen))
+        return out
     out, merged = [], {}
     for tab in data["tabs"]:
         if not tab["rows"]:
@@ -146,7 +154,7 @@ class Snapshot:
     and the last card of each column stretches so the columns end flush."""
 
     def __init__(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="wide",
-                 arrangement=None):
+                 arrangement=None, entries=None):
         self.data, self.rng, self.range_text, self.style = data, rng, range_text, style
         self.settings = settings or {}
         charts.set_overrides(store.color_overrides(self.settings))
@@ -157,7 +165,7 @@ class Snapshot:
                               sheet_url=data.get("url", ""))
         self.kpis, self.donuts = [], []  # for the Slack summary
         self.planned = []
-        for i, (card, tabs, chosen) in enumerate(plan(data, layouts, picks)):
+        for i, (card, tabs, chosen) in enumerate(plan(data, layouts, picks, entries)):
             self.kpis += [(_kind(card, tabs), k) for k in _kpis(card, tabs, self.ctx)]
             self.planned.append({"key": card_key(tabs[0], card), "card": card, "tabs": tabs,
                                  "chosen": chosen, "i": i})

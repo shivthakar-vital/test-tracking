@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QTabWidget, QScrollArea, QStyledItemDelegate, QDateEdit, QMenu,
     QToolButton, QWidgetAction, QListWidget, QListWidgetItem, QPlainTextEdit,
     QAbstractItemView, QListView, QSizePolicy, QColorDialog, QInputDialog, QTreeWidget,
-    QTreeWidgetItem, QSplitter, QTableWidget, QTableWidgetItem
+    QTreeWidgetItem, QSplitter, QTableWidget, QTableWidgetItem, QTabBar
 )
 from PyQt5.QtCore import (
     Qt, QObject, QRunnable, QThreadPool, QTimer, QUrl, QDate, pyqtSignal,
@@ -42,9 +42,10 @@ import export_report
 import layout
 import sqldata
 import tracker_store as store
+import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "1.2.1"         # bump this for each release, then push a matching tag (v1.2.1)
+APP_VERSION = "1.2.2"         # bump this for each release, then push a matching tag (v1.2.2)
 APP_CHANNEL = "testing"       # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
@@ -1158,7 +1159,7 @@ class AddChartDialog(QDialog):
 class CardSettingsDialog(QDialog):
     """A card's own settings: title, where it shows, merging, sections."""
 
-    def __init__(self, win, tab, card, lo):
+    def __init__(self, win, tab, card, lo, in_view=False):
         super().__init__(win)
         self.setWindowTitle("Card settings")
         self.setMinimumWidth(520)
@@ -1190,14 +1191,17 @@ class CardSettingsDialog(QDialog):
         new = QPushButton("+ New card for this tab")
         new.clicked.connect(lambda: self._done("new"))
         extra.addWidget(new)
-        if card["id"] not in ("main", "analysis"):
-            delete = QPushButton("Delete this card")
+        if card["id"] not in ("main", "analysis") or in_view:
+            delete = QPushButton("Remove this card from the view" if in_view else "Delete this card")
             delete.clicked.connect(lambda: self._done("delete"))
             extra.addWidget(delete)
-        reset = QPushButton("Reset tab to built-in")
-        reset.setToolTip("Go back to the app's own charts for every card of this tab")
-        reset.clicked.connect(lambda: self._done("reset"))
-        extra.addWidget(reset)
+        if not in_view:
+            reset = QPushButton("Reset tab to built-in")
+            reset.setToolTip("Go back to the app's own charts for every card of this tab")
+            reset.clicked.connect(lambda: self._done("reset"))
+            extra.addWidget(reset)
+        else:
+            self.combine.hide()
         extra.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -2409,9 +2413,17 @@ class ExportDialog(QDialog):
         for b in (self.save_profile, save_as, self.delete_profile):
             prof_row.addWidget(b)
 
+        self.view_box = QComboBox()
+        self.view_box.addItem("MAIN", views.MAIN)
+        for v in win.all_views():
+            self.view_box.addItem(("👥 " if v["shared"] else "") + v["name"], v["id"])
+        self.view_box.setCurrentIndex(max(self.view_box.findData(saved.get("view") or win.current_view_id()), 0))
+        self.view_box.currentIndexChanged.connect(self._view_changed)
+
         form = QFormLayout()
         form.setSpacing(10)
         form.addRow("Profile", prof_row)
+        form.addRow("View", self.view_box)
         form.addRow("Dates", dates)
         form.addRow("Layout", self.style)
         form.addRow("Save to", where)
@@ -2481,10 +2493,11 @@ class ExportDialog(QDialog):
 
     def _default_settings(self):
         return {"preset": "Today", "style": "wide", "picks": {}, "arrangement": None,
-                "folder": self.folder}
+                "folder": self.folder, "view": views.MAIN}
 
     def current_settings(self):
         return {"preset": self.preset.currentText(), "style": self.style.currentData(),
+                "view": self.view_box.currentData(),
                 "picks": dict(self.picks), "folder": self.folder,
                 "arrangement": self.arrange.arrangement() if self.arrange.custom else None}
 
@@ -2510,6 +2523,9 @@ class ExportDialog(QDialog):
             return
         self._applying = True
         self.preset.setCurrentText(p.get("preset", "Today"))
+        self.view_box.blockSignals(True)
+        self.view_box.setCurrentIndex(max(self.view_box.findData(p.get("view") or views.MAIN), 0))
+        self.view_box.blockSignals(False)
         self.style.setCurrentIndex(max(self.style.findData(p.get("style", "wide")), 0))
         self.folder = p.get("folder") or self.folder
         self.picks = dict(p.get("picks") or {})
@@ -2524,7 +2540,7 @@ class ExportDialog(QDialog):
         self._update()
 
     def _same(self, a, b):
-        keys = ("preset", "style", "picks", "arrangement", "folder")
+        keys = ("preset", "style", "picks", "arrangement", "folder", "view")
         norm = lambda s: json.dumps({k: (s or {}).get(k) for k in keys}, sort_keys=True)
         return norm(a) == norm(b)
 
@@ -2583,10 +2599,53 @@ class ExportDialog(QDialog):
 
     # ── what to include ───────────────────────────────────────────────────────
 
+    def view_entries(self):
+        """The chosen view's cards, or None for MAIN."""
+        vid = self.view_box.currentData() if hasattr(self, "view_box") else views.MAIN
+        view = next((v for v in self.win.all_views() if v["id"] == vid), None)
+        return views.entries(view, self.win.data, self.win.layout_of) if view else None
+
+    def _tree_card(self, tab, card):
+        ckey = export_report.card_key(tab, card)
+        item = QTreeWidgetItem([layout.card_title(tab, card)])
+        item.setData(0, Qt.UserRole, (ckey, card["export"]))
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(0, Qt.Checked if self.picks.get(ckey, card["export"]) else Qt.Unchecked)
+        f = item.font(0)
+        f.setBold(True)
+        item.setFont(0, f)
+        for b in card["blocks"]:
+            bkey = export_report.block_key(tab, card, b)
+            child = QTreeWidgetItem([b.get("title") or layout.auto_title(tab, b)])
+            child.setToolTip(0, layout.describe(tab, b))
+            child.setData(0, Qt.UserRole, (bkey, b["export"]))
+            child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+            child.setCheckState(0, Qt.Checked if self.picks.get(bkey, b["export"]) else Qt.Unchecked)
+            item.addChild(child)
+        self.tree.addTopLevelItem(item)
+        item.setExpanded(item.checkState(0) == Qt.Checked)
+        return item
+
+    def _view_changed(self, *_):
+        self._fill_tree()
+        if self.arrange.custom:
+            self.arrange.custom = False               # a different set of cards: arrange afresh
+        self._update()
+
     def _fill_tree(self):
         self.tree.blockSignals(True)
         self.tree.clear()
         merged, groups = {}, {}
+        entries = self.view_entries()
+        if entries is not None:
+            for tab, card, lo, e in entries:
+                self._tree_card(tab, card)
+            self.tree.blockSignals(False)
+            while self.combine_row.count():
+                w = self.combine_row.takeAt(0).widget()
+                if w:
+                    w.deleteLater()
+            return
         for tab in self.win.data["tabs"]:
             if not tab["rows"]:
                 continue
@@ -2599,24 +2658,7 @@ class ExportDialog(QDialog):
                     tabs.append(tab)
                     item.setText(0, export_report.combined_title(card, tabs))
                     continue
-                ckey = export_report.card_key(tab, card)
-                item = QTreeWidgetItem([layout.card_title(tab, card)])
-                item.setData(0, Qt.UserRole, (ckey, card["export"]))
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(0, Qt.Checked if self.picks.get(ckey, card["export"]) else Qt.Unchecked)
-                f = item.font(0)
-                f.setBold(True)
-                item.setFont(0, f)
-                for b in card["blocks"]:
-                    bkey = export_report.block_key(tab, card, b)
-                    child = QTreeWidgetItem([b.get("title") or layout.auto_title(tab, b)])
-                    child.setToolTip(0, layout.describe(tab, b))
-                    child.setData(0, Qt.UserRole, (bkey, b["export"]))
-                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
-                    child.setCheckState(0, Qt.Checked if self.picks.get(bkey, b["export"]) else Qt.Unchecked)
-                    item.addChild(child)
-                self.tree.addTopLevelItem(item)
-                item.setExpanded(item.checkState(0) == Qt.Checked)
+                item = self._tree_card(tab, card)
                 if combine:
                     merged[card["id"]] = (item, [tab])
         self.tree.blockSignals(False)
@@ -2696,7 +2738,7 @@ class ExportDialog(QDialog):
         arrangement = self.arrange.arrangement() if self.arrange.custom else None
         return export_report.Snapshot(self.win.data, self.rng(), self.label(), _settings(self.win),
                                       layouts=self.layouts, picks=self.picks, style=self.style.currentData(),
-                                      arrangement=arrangement)
+                                      arrangement=arrangement, entries=self.view_entries())
 
     def _update(self, *_):
         name = self.preset.currentText()
@@ -3043,6 +3085,185 @@ class EditTile(QFrame):
             QTimer.singleShot(0, lambda: self.win.set_block(self.tab, self.card, self.b["id"], size=new))
 
 
+class ViewBar(QFrame):
+    """MAIN, the shared views, then your own — above the date filter."""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 8, 0, 0)
+        h.setSpacing(8)
+        h.addWidget(_small_label("View"))
+        self.bar = QTabBar()
+        self.bar.setDrawBase(False)
+        self.bar.setExpanding(False)
+        self.bar.setStyleSheet(
+            "QTabBar::tab { background:#FFFFFF; border:1px solid #CCCCC8; border-radius:12px; padding:3px 12px;"
+            " margin-right:6px; color:#52514E; font-size:12px; }"
+            "QTabBar::tab:selected { background:#E1F5EE; border-color:#1D9E75; color:#0F6E56; font-weight:bold; }")
+        self.bar.currentChanged.connect(self._picked)
+        h.addWidget(self.bar)
+        add = QPushButton("+ New view")
+        add.setObjectName("link")
+        add.clicked.connect(self.win.new_view)
+        h.addWidget(add)
+        h.addStretch(1)
+        self.settings_btn = QPushButton("View settings…")
+        self.settings_btn.setToolTip("Rename, add or remove cards, share with everyone, duplicate, delete")
+        self.settings_btn.clicked.connect(lambda: self.win.view_settings())
+        h.addWidget(self.settings_btn)
+        self._ids = []
+
+    def refresh(self):
+        self.bar.blockSignals(True)
+        while self.bar.count():
+            self.bar.removeTab(0)
+        self._ids = [views.MAIN]
+        self.bar.addTab("MAIN")
+        self.bar.setTabToolTip(0, "Every tab's cards, as the admin set them up")
+        for v in self.win.all_views():
+            i = self.bar.addTab(("👥 " if v["shared"] else "") + v["name"])
+            self.bar.setTabToolTip(i, "Shared with everyone by the admin" if v["shared"] else "Only on this computer")
+            self._ids.append(v["id"])
+        current = self.win.current_view_id()
+        self.bar.setCurrentIndex(self._ids.index(current) if current in self._ids else 0)
+        self.bar.blockSignals(False)
+        self.settings_btn.setVisible(current != views.MAIN)
+
+    def _picked(self, i):
+        if 0 <= i < len(self._ids):
+            self.win.set_view(self._ids[i])
+
+
+class ViewSettingsDialog(QDialog):
+    """A view's name and cards, and sharing it with everyone (admin)."""
+
+    def __init__(self, win, view, is_admin_view):
+        super().__init__(win)
+        self.win, self.view = win, views.copy_view(view)
+        self.action = None
+        self.setWindowTitle(f"View settings — {view['name']}")
+        self.setMinimumWidth(620)
+        self.name = QLineEdit(view["name"])
+        self.list = QListWidget()
+        self.list.setMinimumHeight(240)
+        add = QToolButton()
+        add.setText("+ Add card ▾")
+        add.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(add)
+        linked = menu.addMenu("From Main (stays in sync with it)")
+        copied = menu.addMenu("Copy of a Main card (to change here)")
+        for label, ref in views.main_cards(win.data, win.layout_of):
+            linked.addAction(label, lambda r=ref: self._add({"ref": r}))
+            copied.addAction(label, lambda r=ref: self._add_copy(r))
+        blank = menu.addMenu("New empty card for")
+        for t in win.data["tabs"]:
+            blank.addAction(t["title"], lambda t=t: self._add({"tab": t["title"], "card": {
+                "id": layout.new_id(), "title": "New card", "dash": True, "export": True,
+                "combine": False, "split": None, "blocks": []}}))
+        add.setMenu(menu)
+        up, down, remove = QPushButton("↑"), QPushButton("↓"), QPushButton("Remove")
+        up.clicked.connect(lambda: self._move(-1))
+        down.clicked.connect(lambda: self._move(1))
+        remove.clicked.connect(self._remove)
+        row = QHBoxLayout()
+        for w in (add, up, down, remove):
+            row.addWidget(w)
+        row.addStretch(1)
+
+        manage = QHBoxLayout()
+        if view["shared"]:
+            b = QPushButton("Stop sharing")
+            b.setToolTip("Take it back to just your computer (admin)")
+            b.clicked.connect(lambda: self._done("unshare"))
+        else:
+            b = QPushButton("👥 Share with everyone…")
+            b.setToolTip("Admin passcode: everyone using this release sheet gets this view")
+            b.clicked.connect(lambda: self._done("share"))
+        manage.addWidget(b)
+        dup = QPushButton("Duplicate")
+        dup.clicked.connect(lambda: self._done("duplicate"))
+        delete = QPushButton("Delete view")
+        delete.clicked.connect(lambda: self._done("delete"))
+        manage.addWidget(dup)
+        manage.addWidget(delete)
+        manage.addStretch(1)
+
+        note = _small_label("Cards from Main stay in sync with it. Cards of this view's own can be "
+                            "changed with ✎ Edit on the card." + (" This view is shared: changes "
+                            "apply to everyone." if view["shared"] else " This view is only on this computer."),
+                            MUTED)
+        note.setWordWrap(True)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        ok = buttons.addButton("Save", QDialogButtonBox.AcceptRole)
+        ok.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form = QFormLayout()
+        form.addRow("Name", self.name)
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(_small_label("CARDS (TOP TO BOTTOM)", "#888885", 10))
+        root.addWidget(self.list, 1)
+        root.addLayout(row)
+        root.addWidget(note)
+        root.addLayout(manage)
+        root.addWidget(buttons)
+        self._fill()
+
+    def _label(self, e):
+        if "ref" in e:
+            title, _, cid = e["ref"].rpartition("|")
+            tab = self.win._tab(title)
+            card = next((c for c in self.win.layout_of(tab)["cards"] if c["id"] == cid), None) if tab else None
+            return f"{layout.card_title(tab, card) if card else e['ref']}   ·  from Main"
+        tab = self.win._tab(e["tab"])
+        return f"{layout.card_title(tab, e['card']) if tab else e['card'].get('title')}   ·  " \
+               f"{len(e['card']['blocks'])} chart{'s' if len(e['card']['blocks']) != 1 else ''}, this view's own"
+
+    def _fill(self, select=None):
+        self.list.clear()
+        for e in self.view["cards"]:
+            self.list.addItem(self._label(e))
+        if select is not None and self.list.count():
+            self.list.setCurrentRow(max(0, min(select, self.list.count() - 1)))
+
+    def _add(self, entry):
+        self.view["cards"].append(entry)
+        self._fill(len(self.view["cards"]) - 1)
+
+    def _add_copy(self, ref):
+        title, _, cid = ref.rpartition("|")
+        tab = self.win._tab(title)
+        card = next((c for c in self.win.layout_of(tab)["cards"] if c["id"] == cid), None)
+        if card:
+            own = layout.copy_layout(card)
+            own.update(id=layout.new_id(), title=layout.card_title(tab, card), combine=False)
+            self._add({"tab": title, "card": own})
+
+    def _move(self, step):
+        i, j = self.list.currentRow(), self.list.currentRow() + step
+        cards = self.view["cards"]
+        if 0 <= i < len(cards) and 0 <= j < len(cards):
+            cards[i], cards[j] = cards[j], cards[i]
+            self._fill(j)
+
+    def _remove(self):
+        i = self.list.currentRow()
+        if 0 <= i < len(self.view["cards"]):
+            del self.view["cards"][i]
+            self._fill(i)
+
+    def _done(self, action):
+        self.action = action
+        self.accept()
+
+    def result_view(self):
+        self.view["name"] = self.name.text().strip() or self.view["name"]
+        return self.view
+
+
 class Dashboard(QScrollArea):
     def __init__(self, win):
         super().__init__()
@@ -3107,7 +3328,10 @@ class Dashboard(QScrollArea):
         root.setContentsMargins(0, 14, 8, 20)
         root.setSpacing(14)
 
-        title = QLabel(data["title"])
+        cur = self.win.current_view()
+        title = QLabel(html.escape(data["title"]) + (f" <span style='color:#1D9E75'>· {html.escape(cur['name'])}</span>"
+                                                     if cur else ""))
+        title.setTextFormat(Qt.RichText)
         title.setStyleSheet("font-size:20px; font-weight:bold;")
         when = data.get("fetched_at", "")
         try:
@@ -3120,6 +3344,15 @@ class Dashboard(QScrollArea):
         head.addWidget(_small_label(f"Data as of {when} · hover over a chart for details, click it "
                                     "to see those rows", MUTED), 1, Qt.AlignBottom)
         root.addLayout(head)
+
+        view = self.win.current_view()
+        if view is not None:                       # a custom view: just its cards
+            self._view_cards(root, data, view)
+            root.addStretch(1)
+            self.setWidget(body)
+            self.body = body
+            QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(pos))
+            return
 
         tiles = QGridLayout()
         tiles.setSpacing(10)
@@ -3144,6 +3377,32 @@ class Dashboard(QScrollArea):
         self.setWidget(body)
         self.body = body
         QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(pos))
+
+    def _view_cards(self, root, data, view):
+        e = self.win.editing
+        if e and e.get("view") == view["id"]:
+            view = e["view_obj"]                   # the copy being edited
+        got = views.entries(view, data, self.win.layout_of)
+        if not got:
+            box = QFrame()
+            box.setObjectName("card")
+            v = QVBoxLayout(box)
+            v.setContentsMargins(18, 18, 18, 18)
+            v.addWidget(QLabel(f"<b>{html.escape(view['name'])}</b> has no cards yet."))
+            add = QPushButton("+ Add cards…")
+            add.setObjectName("primary")
+            add.clicked.connect(lambda: self.win.view_settings())
+            v.addWidget(_small_label("Add cards from the main page (they stay in sync with it), or "
+                                     "new cards of your own with any charts you like.", MUTED))
+            v.addWidget(add, 0, Qt.AlignLeft)
+            root.addWidget(box)
+            return
+        for tab, card, lo, entry in got:
+            try:
+                root.addWidget(self._card(tab, card, lo, linked="ref" in entry))
+            except Exception as exc:
+                root.addWidget(_small_label(f"Couldn't draw {layout.card_title(tab, card)}: "
+                                            f"{type(exc).__name__}: {exc}", RED))
 
     def _tile(self, tab):
         rows = self._rows(tab)
@@ -3186,7 +3445,7 @@ class Dashboard(QScrollArea):
         lay.addWidget(mini)
         return tile
 
-    def _card(self, tab, card, lo, preview=False):
+    def _card(self, tab, card, lo, preview=False, linked=False):
         """One dashboard card, drawn from its layout (see layout.py). While it's being
         edited (✎ Edit), each chart is a tile you can drag, resize, and change."""
         ctx = blocks.Ctx(self.range, self.range_text, export=False, settings=_settings(self.win),
@@ -3214,6 +3473,12 @@ class Dashboard(QScrollArea):
             done.clicked.connect(self.win.finish_editing)
             for w in (settings_btn, cancel, done):
                 head.addWidget(w)
+        elif linked:
+            head.addWidget(_small_label("from Main", MUTED), 0, Qt.AlignBottom)
+            open_btn = QPushButton("Open table →")
+            open_btn.setObjectName("link")
+            open_btn.clicked.connect(lambda: self._go(tab["title"]))
+            head.addWidget(open_btn)
         elif not preview:
             edit = QPushButton("✎ Edit")
             edit.setObjectName("link")
@@ -3329,7 +3594,9 @@ class Dashboard(QScrollArea):
 
     def is_editing(self, tab, card):
         e = self.win.editing
-        return bool(e) and e["tab"] == tab["title"] and e["card"] == card["id"]
+        here = self.win.current_view()
+        return bool(e) and e["tab"] == tab["title"] and e["card"] == card["id"] and \
+            e.get("view") == (here["id"] if here else None)
 
     def _gallery_menu(self, tab, card, button):
         menu = QMenu(button)
@@ -3491,6 +3758,9 @@ class TrackerApp(QMainWindow):
         dash_lay = QVBoxLayout(dash_page)
         dash_lay.setContentsMargins(0, 0, 0, 0)
         dash_lay.setSpacing(0)
+        self.view_bar = ViewBar(self)
+        dash_lay.addWidget(self.view_bar)
+        self.view_bar.refresh()
         dash_lay.addWidget(self.date_bar)
         dash_lay.addWidget(self.dashboard, 1)
         self.tabs.addTab(dash_page, "📊 Dashboard")
@@ -3728,6 +3998,7 @@ class TrackerApp(QMainWindow):
         self.data = data
         charts.set_overrides(store.color_overrides(data.get("settings")))
         charts.register(data)
+        self.view_bar.refresh()                   # shared views may have changed in the sheet
         self.setWindowTitle(f"{APP_TITLE} — {data['title']}")
         titles = [t["title"] for t in data["tabs"]]
         for title in list(self.pages):
@@ -3858,6 +4129,137 @@ class TrackerApp(QMainWindow):
                     out.append((s.get("title") or s["url"], lo))
         return out
 
+    # ── views ─────────────────────────────────────────────────────────────────
+
+    def all_views(self):
+        return views.all_views(self.cfg, self.url, _settings(self)) if self.url else []
+
+    def current_view_id(self):
+        return self.cfg.setdefault("current_view", {}).get(store.sheet_id(self.url) or self.url, views.MAIN)
+
+    def current_view(self):
+        """The custom view on screen, or None for MAIN (or if it was deleted)."""
+        vid = self.current_view_id()
+        if vid == views.MAIN:
+            return None
+        return next((v for v in self.all_views() if v["id"] == vid), None)
+
+    def set_view(self, view_id):
+        if self.editing:
+            self.cancel_editing()
+        self.cfg.setdefault("current_view", {})[store.sheet_id(self.url) or self.url] = view_id
+        store.save_config(self.cfg)
+        self.view_bar.refresh()
+        if self.data:
+            self.dashboard.set_data(self.data)
+
+    def new_view(self):
+        if not self.data:
+            return
+        name, ok = QInputDialog.getText(self, "New view", "Name your view (e.g. “EOD”, “Viking only”):")
+        if not ok or not name.strip():
+            return
+        v = views.new_view(name)
+        views.private(self.cfg, self.url).append(v)
+        store.save_config(self.cfg)
+        self.set_view(v["id"])
+        self.view_settings()
+
+    def _save_view(self, view, settings=None, msg=None):
+        """Shared views go to the sheet (needs the unlocked admin settings); yours to this computer."""
+        if view.get("shared"):
+            settings = dict(settings if settings is not None else _settings(self))
+            settings[views.PREFIX + view["id"]] = views.dump(view)
+            self._save_settings(settings, msg or f"Saved the shared view “{view['name']}” for everyone.")
+        else:
+            mine = views.private(self.cfg, self.url)
+            i = next((k for k, v in enumerate(mine) if v["id"] == view["id"]), None)
+            if i is None:
+                mine.append(view)
+            else:
+                mine[i] = view
+            store.save_config(self.cfg)
+            self.view_bar.refresh()
+            self.dashboard.set_data(self.data)
+            self._set_status(msg or f"Saved the view “{view['name']}”.")
+
+    def view_settings(self):
+        view = self.current_view()
+        if view is None:
+            return
+        settings = None
+        if view["shared"]:
+            box = QMessageBox(self)
+            box.setWindowTitle("Shared view")
+            box.setText(f"“{view['name']}” is shared with everyone. Changing it needs the admin passcode. "
+                        "You can also make your own copy to change freely.")
+            change = box.addButton("Change it (admin)", QMessageBox.AcceptRole)
+            mine = box.addButton("Make my own copy", QMessageBox.ActionRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec_()
+            if box.clickedButton() is mine:
+                self._duplicate_view(view)
+                return
+            if box.clickedButton() is not change:
+                return
+            unlocked = self._admin_unlock(self, "shared views")
+            if not unlocked:
+                return
+            settings = unlocked[0]
+        dlg = ViewSettingsDialog(self, view, bool(settings))
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        new = dlg.result_view()
+        new["shared"] = view["shared"]
+        if dlg.action == "delete":
+            if QMessageBox.question(self, "Delete view", f"Delete the view “{view['name']}”"
+                                    + (" for everyone?" if view["shared"] else "?"),
+                                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+            if view["shared"]:
+                settings = dict(settings)
+                settings.pop(views.PREFIX + view["id"], None)
+                self.cfg.setdefault("current_view", {})[store.sheet_id(self.url) or self.url] = views.MAIN
+                self._save_settings(settings, f"Deleted the shared view “{view['name']}”.")
+            else:
+                mine = views.private(self.cfg, self.url)
+                mine[:] = [v for v in mine if v["id"] != view["id"]]
+                self.set_view(views.MAIN)
+            return
+        if dlg.action == "duplicate":
+            self._duplicate_view(new)
+            return
+        if dlg.action == "share":
+            unlocked = self._admin_unlock(self, "shared views")
+            if not unlocked:
+                return
+            mine = views.private(self.cfg, self.url)
+            mine[:] = [v for v in mine if v["id"] != view["id"]]
+            store.save_config(self.cfg)
+            new["shared"] = True
+            self._save_view(new, unlocked[0], f"Shared “{new['name']}” with everyone.")
+            return
+        if dlg.action == "unshare":
+            settings = dict(settings)
+            settings.pop(views.PREFIX + view["id"], None)
+            new["shared"] = False
+            views.private(self.cfg, self.url).append(new)
+            store.save_config(self.cfg)
+            self._save_settings(settings, f"“{new['name']}” is now only on this computer.")
+            return
+        self._save_view(new, settings)
+
+    def _duplicate_view(self, view):
+        copy_ = views.copy_view(view)
+        copy_.update(id=layout.new_id(), name=f"{view['name']} (my copy)", shared=False)
+        for e in copy_["cards"]:
+            if "card" in e:
+                e["card"]["id"] = layout.new_id()
+        views.private(self.cfg, self.url).append(copy_)
+        store.save_config(self.cfg)
+        self.set_view(copy_["id"])
+        self._set_status(f"Made “{copy_['name']}”, your own copy.")
+
     # ── editing cards on the dashboard ────────────────────────────────────────
     # ✎ Edit on a card (admin passcode) works on a copy of the tab's layout; Done
     # editing saves it to the sheet for everyone, Cancel throws it away.
@@ -3872,6 +4274,21 @@ class TrackerApp(QMainWindow):
                 self.finish_editing()
             else:
                 self.cancel_editing()
+        view = self.current_view()
+        if view is not None:                      # a card of a custom view
+            settings = stored = None
+            if view["shared"]:
+                unlocked = self._admin_unlock(self, "shared views")
+                if not unlocked:
+                    return
+                settings, stored = unlocked
+            self.editing = {"tab": tab["title"], "card": card_id, "view": view["id"],
+                            "view_obj": views.copy_view(view), "shared": view["shared"],
+                            "settings": settings, "stored": stored}
+            self._redraw()
+            self._set_status("Editing a card of “" + view["name"] + "” — Done editing saves it"
+                             + (" for everyone." if view["shared"] else "."))
+            return
         unlocked = self._admin_unlock(self, "dashboard cards")
         if not unlocked:
             return
@@ -3894,6 +4311,9 @@ class TrackerApp(QMainWindow):
         e = self.editing
         if not e:
             return None
+        if e.get("view"):
+            return next((x["card"] for x in e["view_obj"]["cards"]
+                         if "card" in x and x["card"]["id"] == (card_id or e["card"])), None)
         return next((c for c in e["layout"]["cards"] if c["id"] == (card_id or e["card"])), None)
 
     def _redraw(self):
@@ -3901,7 +4321,7 @@ class TrackerApp(QMainWindow):
 
     def cancel_editing(self):
         e, self.editing = self.editing, None
-        if e and e["settings"].get(store.PASSCODE_KEY) != e["stored"]:
+        if e and e.get("settings") and e["settings"].get(store.PASSCODE_KEY) != e["stored"]:
             self._save_settings(e["settings"], "Admin passcode set.")
         self._redraw()
         self._set_status("Changes thrown away.")
@@ -3909,6 +4329,11 @@ class TrackerApp(QMainWindow):
     def finish_editing(self):
         e, self.editing = self.editing, None
         if not e:
+            return
+        if e.get("view"):
+            vo = e["view_obj"]
+            vo["shared"] = e["shared"]
+            self._save_view(vo, e["settings"])
             return
         tab = self._tab(e["tab"])
         settings = dict(e["settings"])
@@ -3927,8 +4352,24 @@ class TrackerApp(QMainWindow):
 
     def card_settings(self, tab, card):
         e = self.editing
-        dlg = CardSettingsDialog(self, tab, card, e["layout"])
+        dlg = CardSettingsDialog(self, tab, card, e.get("layout"), in_view=bool(e.get("view")))
         if dlg.exec_() != QDialog.Accepted:
+            return
+        if e.get("view"):                          # a view's own card
+            cards = e["view_obj"]["cards"]
+            if dlg.action == "delete":
+                cards[:] = [x for x in cards if x.get("card") is not card]
+                self.finish_editing()
+                return
+            dlg.apply()
+            if dlg.action == "new":
+                name, ok = QInputDialog.getText(self, "New card", "Card title:")
+                if ok and name.strip():
+                    new = {"id": layout.new_id(), "title": name.strip(), "dash": True, "export": True,
+                           "combine": False, "split": None, "blocks": []}
+                    cards.append({"tab": tab["title"], "card": new})
+                    e["card"] = new["id"]
+            self._redraw()
             return
         if dlg.action == "reset":
             if QMessageBox.question(self, "Reset to built-in",

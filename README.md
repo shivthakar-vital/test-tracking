@@ -176,6 +176,21 @@ The sheet is a SQLite database (rebuilt on every sync, in memory):
 a table. Add `GROUP_CONCAT(_tab || ':' || _row) AS _rows` to make slices and bars clickable;
 tables with `_tab, _row` are clickable too. Only `SELECT` queries run.
 
+## Views
+
+The dashboard has **views**, picked from the row of buttons above the dates. **MAIN** is every tab's
+cards, as the admin set them up. **+ New view** makes your own page of cards; **View settings…**
+renames it, adds cards, reorders or removes them, duplicates or deletes it.
+
+- **Add card ▾ → From Main** adds a card that stays in sync with MAIN (marked *from Main*).
+- **Copy of a Main card** or **New empty card for…** gives the view a card of its own, changed with
+  **✎ Edit** on the card (add charts, SQL, gallery, drag and resize — the same as on MAIN).
+- Your views are kept on your computer, and need no passcode.
+- **👥 Share with everyone…** (admin passcode) puts a view in the sheet's hidden settings tab, so
+  every user sees it (marked 👥). Changing a shared view needs the passcode; anyone can **Make my
+  own copy** of it. **Stop sharing** takes it back to the admin's computer.
+- The export dialog has a **View** menu: export MAIN or any view. Profiles remember the view.
+
 ## Admin: filters
 
 Click **⚙ Settings → 🔎 Filters…** (admin passcode) to choose which columns get a **filter**
