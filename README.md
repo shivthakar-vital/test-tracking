@@ -257,8 +257,8 @@ published as a GitHub **pre-release**: the install line and the ⬆ Update butto
 copies never pick it up, so coworkers stay on the stable build. Testing copies are offered
 newer testing *and* stable versions.
 
-- Stable: **v1.1.7** (on `main`). Next stable: **v2.0.0**.
-- Testing: **v1.2.x** (on the `v2` branch) — the 2.0 overhaul while it's being tried out. v1.2.0 is
+- Stable: **v2.0.0** (on `main`). The previous stable, v1.1.7, is still listed in **Versions…**.
+- Testing: **v1.2.x** — the builds that became 2.0.0. v1.2.0 is
   kept on the `release/1.2.0` branch, and its app in `~/Library/Application Support/TestTracker/builds/`,
   which **Versions…** lists as "on this Mac" to fall back to.
 
