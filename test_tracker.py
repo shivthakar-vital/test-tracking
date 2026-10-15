@@ -45,7 +45,7 @@ import tracker_store as store
 import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "2.0.0"         # bump this for each release, then push a matching tag (v2.0.0)
+APP_VERSION = "2.0.1"         # bump this for each release, then push a matching tag (v2.0.1)
 APP_CHANNEL = "stable"        # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
@@ -781,6 +781,21 @@ class AddChartDialog(QDialog):
         self.form.addRow("Split by", self.series)
         self.form.addRow("Columns", self.cols)
         self.form.addRow("Only where", self.filters_w)
+        self.show_blanks = QCheckBox("Show blanks, as")
+        self.show_blanks.setToolTip("Count rows where this column is empty, under the name you type")
+        self.blank_name = QLineEdit()
+        self.blank_name.setMaximumWidth(220)
+        self.show_blanks.toggled.connect(self._changed)
+        self.show_blanks.toggled.connect(lambda on: self.blank_name.setEnabled(on))
+        self.blank_name.textChanged.connect(self._changed)
+        blanks = QHBoxLayout()
+        blanks.setContentsMargins(0, 0, 0, 0)
+        blanks.addWidget(self.show_blanks)
+        blanks.addWidget(self.blank_name)
+        blanks.addStretch(1)
+        self.blanks_w = QWidget()
+        self.blanks_w.setLayout(blanks)
+        self.form.addRow("Blanks", self.blanks_w)
         self.form.addRow("Dates", self.dates)
         simple = QWidget()
         simple.setLayout(self.form)
@@ -922,6 +937,10 @@ class AddChartDialog(QDialog):
                              else Qt.Unchecked)
         for f in spec.get("filters") or []:
             self._add_filter(*f)
+        show_blanks, _ = chartquery.blanks_of(spec)
+        self.show_blanks.setChecked(show_blanks)
+        self.blank_name.setText((spec.get("blank_label") or "").strip())
+        self.blank_name.setEnabled(show_blanks)
         if self.hand_written:
             self.sql.setPlainText((block or {}).get("sql", ""))
         self._set_show(self.show_as, quiet=True)
@@ -1031,6 +1050,8 @@ class AddChartDialog(QDialog):
                         if w is not None and hasattr(w, "parts")],
             "dates": self.dates.currentData() or "follow",
             "show": self.show_as,
+            "show_blanks": self.show_blanks.isChecked(),
+            "blank_label": self.blank_name.text().strip(),
         }
 
     def _visible_fields(self):
@@ -1039,7 +1060,8 @@ class AddChartDialog(QDialog):
                 self.product: src == "bugs",
                 self.group: self.show_as in ("pie", "bars"),
                 self.series: self.show_as in ("bars", "days"),
-                self.cols: self.show_as == "table"}
+                self.cols: self.show_as == "table",
+                self.blanks_w: self.show_as != "table"}
         for w, on in show.items():
             w.setVisible(on)
             lbl = self.form.labelForField(w)
@@ -1100,6 +1122,8 @@ class AddChartDialog(QDialog):
         self.hand_note.setText("Written by hand: the Simple form won't change it." if self.hand_written else "")
         self.back_btn.setVisible(self.hand_written)
         self.title.setPlaceholderText(chartquery.default_title(spec) if not self.hand_written else "Query")
+        self.blank_name.setPlaceholderText(chartquery.suggested_blank_name(
+            spec.get("series") if self.show_as == "days" else spec.get("group")))
         self.timer.start(250)
 
     def result_block(self):
@@ -1111,6 +1135,7 @@ class AddChartDialog(QDialog):
                  dash=self.on_dash.isChecked(), export=self.on_export.isChecked())
         if not self.hand_written:
             b["unit"] = chartquery.unit_for(spec)
+            b["blank_label"] = chartquery.blanks_of(spec)[1]
             b["color_by"] = spec.get("series") if self.show_as in ("bars", "days") and spec.get("series") \
                 else spec.get("group")
         for k in ("column", "count", "colors", "which", "columns", "hide_zero"):
@@ -1151,7 +1176,15 @@ class AddChartDialog(QDialog):
         for p in parts:
             h.addWidget(self.win.dashboard._part(self.tab, p, lambda t: None), 1 if p.wide else 0, Qt.AlignTop)
         if not parts:
-            h.addWidget(_small_label("No rows to chart in these dates.", MUTED))
+            spec = self.spec()
+            hidden = not self.hand_written and not spec.get("show_blanks") and spec.get("show") != "table"
+            dated = spec.get("dates") not in ("ignore",) and self.win.dashboard.range is not None
+            msg = "Nothing to chart" + (f" in {self.win.dashboard.range_text}" if dated else "") + "."
+            if hidden:
+                msg += " Blank cells are hidden — tick “Show blanks” to count them."
+            lbl = _small_label(msg, MUTED)
+            lbl.setWordWrap(True)
+            h.addWidget(lbl, 1)
         h.addStretch(0 if any(p.wide for p in parts) else 1)
         self.pv_chart.setWidget(box)
 

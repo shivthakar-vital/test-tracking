@@ -684,6 +684,14 @@ def run_query(b, ctx):
     return db, cols, rows, ms
 
 def _query_colors(b, name, values):
+    colors = _query_colors_raw(b, name, values)
+    blank = (b.get("blank_label") or "(blank)").strip()
+    for v in values:                               # blanks are always grey
+        if v in (blank, "(blank)"):
+            colors[v] = charts.PENDING
+    return colors
+
+def _query_colors_raw(b, name, values):
     key = (b.get("color_by") or name or "").strip()
     low = key.lower()
     if "status" in low:
@@ -717,7 +725,7 @@ def _fmt(v):
             pass
     return "" if v is None else str(v)
 
-def _query_table(cols, rows, ctx, limit):
+def _query_table(cols, rows, ctx, limit, sql=""):
     """HTML for a result table. "<col> link" / "<x>_link" columns become links on their column."""
     vis = [i for i, c in enumerate(cols) if not c.startswith("_")]
     link_cols = {i for i in vis if cols[i].endswith(" link") or cols[i].endswith("_link")}
@@ -751,8 +759,9 @@ def _query_table(cols, rows, ctx, limit):
         lines.append(f'<span style="color:{MUTED}">and {len(rows) - limit} more · '
                      f'<a href="pick:all" style="color:{LINK}">open them in the table</a></span>')
     if not rows:
-        lines = [f'<span style="color:{MUTED}">No rows' + (f' in {esc(ctx.range_text)}' if ctx.rng else "")
-                 + ".</span>"]
+        uses_dates = ":start" in sql or ":end" in sql
+        lines = [f'<span style="color:{MUTED}">No rows' + (f' in {esc(ctx.range_text)}' if ctx.rng and uses_dates
+                                                         else "") + ".</span>"]
     return "".join(lines)
 
 def _friendly(col):
@@ -778,7 +787,7 @@ def _sql(b, tabs, ctx):
             ti, ri = cols.index("_tab"), cols.index("_row")
             all_refs = [f"{r[ti]}:{r[ri]}" for r in rows]
             pick = lambda _, db=db, refs=all_refs: _refs_pick(db)(refs)
-        return [Part(title, _query_table(cols, rows, ctx, None if ctx.export else 25), pick,
+        return [Part(title, _query_table(cols, rows, ctx, None if ctx.export else 25, b.get("sql") or ""), pick,
                      wide=True, full=True)]
     if not rows:
         return None

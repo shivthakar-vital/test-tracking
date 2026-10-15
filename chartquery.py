@@ -131,11 +131,22 @@ def to_sql(spec, db):
             sql += f"\nORDER BY {q(order)} DESC"
         return sql
 
+    # blanks: hidden (left out), or counted under a name ("Unassigned", "(blank)"…)
+    show_blanks, blank = blanks_of(spec)
+
+    def value(col):
+        return f"COALESCE(NULLIF({q(col)}, ''), {lit(blank)})" if show_blanks else q(col)
+
+    def not_blank(col):
+        return f"{q(col)} IS NOT NULL AND {q(col)} != ''"
+
     if show == "days":
         group = spec.get("date_column") or (date_columns(db, spec) or ["run_date"])[0]
         where.append(f"{q(group)} IS NOT NULL")
         series = spec.get("series")
-        sel = f"{q(group)} AS day" + (f", COALESCE(NULLIF({q(series)}, ''), '(blank)') AS series" if series else "")
+        if series and not show_blanks:
+            where.append(not_blank(series))
+        sel = f"{q(group)} AS day" + (f", {value(series)} AS series" if series else "")
         grp = "day" + (", series" if series else "")
         sql = f"SELECT {sel},\n       COUNT(*) AS n,\n       {rows_ref}\nFROM {q(table)}"
         sql += "\nWHERE " + "\n  AND ".join(where)
@@ -143,17 +154,34 @@ def to_sql(spec, db):
 
     group = spec.get("group") or (columns_for(db, spec) or ["status"])[0]
     series = spec.get("series") if show == "bars" else None
-    if show == "pie":                       # pies leave blanks out
-        where.append(f"{q(group)} IS NOT NULL AND {q(group)} != ''")
-        label = f"{q(group)} AS label"
-    else:
-        label = f"COALESCE(NULLIF({q(group)}, ''), '(blank)') AS label"
-    sel = label + (f", COALESCE(NULLIF({q(series)}, ''), '(blank)') AS series" if series else "")
+    if not show_blanks:
+        where += [not_blank(c) for c in (group, series) if c]
+    sel = f"{value(group)} AS label" + (f", {value(series)} AS series" if series else "")
     grp = "label" + (", series" if series else "")
     sql = f"SELECT {sel},\n       COUNT(*) AS n,\n       {rows_ref}\nFROM {q(table)}"
     if where:
         sql += "\nWHERE " + "\n  AND ".join(where)
     return sql + f"\nGROUP BY {grp}\nORDER BY n DESC"
+
+
+def suggested_blank_name(col):
+    """What to call blank cells: "Unassigned" for people columns, "No status" for statuses…"""
+    low = (col or "").lower()
+    if any(w in low for w in ("assign", "owner", "tester", "qa ")):
+        return "Unassigned"
+    if "status" in low:
+        return "No status"
+    return "(blank)"
+
+def blanks_of(spec):
+    """(show blanks?, their name). Pies used to hide blanks and bars to show them,
+    so charts saved before this setting existed keep doing that."""
+    show = spec.get("show_blanks")
+    if show is None:
+        show = spec.get("show", "pie") != "pie"
+    name = (spec.get("blank_label") or "").strip() or suggested_blank_name(
+        spec.get("series") if spec.get("show") == "days" else spec.get("group"))
+    return bool(show), name
 
 
 def unit_for(spec):
