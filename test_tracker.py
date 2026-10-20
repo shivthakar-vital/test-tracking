@@ -3307,10 +3307,10 @@ class TokensDialog(QDialog):
         self.setMinimumWidth(620)
         creds = changelog.credentials()
         intro = QLabel(
-            "To make change logs, the app reads <b>VitalBio/device-sw</b> on GitHub and the <b>PROD</b> "
-            "tickets in JIRA, using read-only tokens you create. They're kept in this Mac's Keychain, "
-            "never in the sheet. Coworkers don't need them: the change logs you make are saved to the "
-            "sheet for everyone.")
+            "To make change logs, the app reads <b>VitalBio/device-sw</b>'s history using your existing "
+            "<b>SSH access to GitHub</b> (no GitHub token needed), and the <b>PROD</b> tickets in JIRA using "
+            "a JIRA API token. It's kept in this Mac's Keychain, never in the sheet. Coworkers don't need "
+            "any of this: the change logs you make are saved to the sheet for everyone.")
         intro.setWordWrap(True)
         self.gh = QLineEdit(creds["github"])
         self.gh.setEchoMode(QLineEdit.Password)
@@ -3319,10 +3319,10 @@ class TokensDialog(QDialog):
         self.email.setPlaceholderText("you@vitalbio.com")
         self.jira = QLineEdit(creds["jira"])
         self.jira.setEchoMode(QLineEdit.Password)
-        gh_help = QLabel('<a href="https://github.com/settings/personal-access-tokens/new">Create a GitHub '
-                         'token</a> — fine-grained · Resource owner: <b>VitalBio</b> · Only select repositories: '
-                         '<b>device-sw</b> · Permissions: <b>Contents</b> and <b>Pull requests</b>, read-only. '
-                         '(Your org may need to approve it.)')
+        self.gh.setPlaceholderText("optional — leave empty to use your SSH access")
+        gh_help = QLabel('Optional. Leave it empty: the app uses git over your SSH key. A <a href="https://github.com/'
+                         'settings/personal-access-tokens/new">GitHub token</a> (fine-grained, VitalBio/device-sw, '
+                         'Contents + Pull requests read-only) also lets it read PR descriptions.')
         jira_help = QLabel('<a href="https://id.atlassian.com/manage-profile/security/api-tokens">Create a '
                            'JIRA API token</a> — signed in as the email above.')
         for lbl in (gh_help, jira_help):
@@ -3355,7 +3355,10 @@ class TokensDialog(QDialog):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         bits = []
         try:
-            bits.append("GitHub ✓ " + changelog.test_github(self.gh.text().strip()))
+            if self.gh.text().strip():
+                bits.append("GitHub ✓ " + changelog.test_github(self.gh.text().strip()))
+            else:
+                bits.append(f"GitHub over SSH ✓ ({changelog.REPO} at {changelog.test_git()})")
         except Exception as exc:
             bits.append(f"GitHub ✗ {exc}")
         try:

@@ -3,8 +3,11 @@ Change logs between two software versions: what was merged (GitHub PRs) and whic
 JIRA tickets it touched, grouped like the team's change log:
 New features · Improvements · Bug fixes · GUI / UX · Infrastructure & tooling · Release.
 
-How one is made (by the admin, who has the tokens):
-  1. GitHub: compare the two commits (VitalBio/device-sw), and find each commit's PR.
+How one is made (by the admin):
+  1. The commits between the two versions, from a local copy of VitalBio/device-sw's history
+     kept by the app (git over your SSH access — no GitHub token needed), with each PR's number
+     and title from its merge commit. With a GitHub token, PRs come from the GitHub API instead
+     (which also reads PR descriptions for PROD keys).
   2. PROD keys from the PR title, branch, and description (e.g. PROD-3330).
   3. JIRA: one search for those keys → summary, type, priority, status, fix versions.
   4. Each PR gets a category from its tickets' types and from keywords.
@@ -93,8 +96,102 @@ def credentials():
             "jira": get_secret("jira-token")}
 
 def has_credentials():
+    """JIRA is required; GitHub works through git over SSH unless a token is set."""
     c = credentials()
-    return bool(c["github"] and c["jira_email"] and c["jira"])
+    return bool(c["jira_email"] and c["jira"])
+
+
+# ── git over SSH (no GitHub token) ────────────────────────────────────────────
+
+GIT_URL = f"git@github.com:{REPO}.git"
+
+def _repo_dir():
+    import os, tracker_store as store
+    return os.path.join(store.DATA_DIR, "repos", REPO.split("/")[-1] + ".git")
+
+def _git(*args, cwd=None, timeout=300):
+    import os, shutil
+    git = shutil.which("git") or "/usr/bin/git"
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0",
+               GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15")
+    try:
+        r = subprocess.run([git] + list(args), cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        raise ChangeLogError("git isn't installed. Install Apple's command line tools: run "
+                             "xcode-select --install in Terminal.")
+    except subprocess.TimeoutExpired:
+        raise ChangeLogError("git took too long (is the network up?).")
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip()
+        if "Permission denied" in err or "Could not read from remote" in err or "Host key" in err:
+            raise ChangeLogError(f"GitHub didn't accept your SSH key for {REPO}. In Terminal, check that "
+                                 f"git clone {GIT_URL} works.\n\n{err[:300]}")
+        raise ChangeLogError(err[:400] or f"git {args[0]} failed")
+    return r.stdout
+
+def update_repo(progress=lambda m: None):
+    """Clone (history only, no file contents) the first time; fetch after that."""
+    import os
+    path = _repo_dir()
+    if not os.path.isdir(path):
+        progress(f"Copying {REPO}'s history (first time only)…")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _git("clone", "--bare", "--filter=blob:none", "--quiet", GIT_URL, path, timeout=900)
+    progress(f"Getting the latest from {REPO}…")
+    _git("fetch", "--quiet", "--prune", "--tags", "--filter=blob:none", "origin",
+         "+refs/heads/*:refs/heads/*", cwd=path, timeout=600)
+    return path
+
+def test_git():
+    return _git("ls-remote", GIT_URL, "HEAD", timeout=60).split()[0][:7]
+
+def git_entries(base, head, progress=lambda m: None):
+    """[(entry, text)] for the changes in head that aren't in base, newest first, from git.
+    Squash merges ("Title (#123)") and merge commits ("Merge pull request #123 from …")
+    become PRs; other commits are listed as commits."""
+    path = update_repo(progress)
+    for ref, name in ((base, "From"), (head, "To")):
+        try:
+            _git("rev-parse", "--verify", "--quiet", ref + "^{commit}", cwd=path)
+        except ChangeLogError:
+            raise ChangeLogError(f"{name} ({ref}) isn't a commit in {REPO}. Check the version's hash.")
+    try:
+        _git("merge-base", "--is-ancestor", base, head, cwd=path)
+        ahead = True
+    except ChangeLogError:
+        ahead = False
+    if not ahead:
+        try:
+            _git("merge-base", "--is-ancestor", head, base, cwd=path)
+            raise ChangeLogError("To is older than From — swap them.")
+        except ChangeLogError as exc:
+            if "swap" in str(exc):
+                raise
+    total = int(_git("rev-list", "--count", f"{base}..{head}", cwd=path).strip() or 0)
+    sep, end = "\x1f", "\x1e"
+    out = _git("log", "--first-parent", f"--format=%H{sep}%an{sep}%cI{sep}%P{sep}%s{sep}%b{end}",
+               f"{base}..{head}", cwd=path)
+    items = []
+    for rec in out.split(end):
+        rec = rec.strip("\n")
+        if not rec:
+            continue
+        sha, author, when, parents, subject, body = (rec.split(sep) + [""] * 6)[:6]
+        merge = re.match(r"Merge pull request #(\d+) from [^/\s]+/(\S+)", subject)
+        squash = re.search(r"\(#(\d+)\)\s*$", subject)
+        if merge:
+            number, branch = int(merge.group(1)), merge.group(2)
+            title = (body.strip().split("\n", 1)[0].strip() or branch)
+        elif squash:
+            number, branch, title = int(squash.group(1)), "", subject[:squash.start()].strip()
+        else:
+            number, branch, title = None, "", subject
+        url = (f"https://github.com/{REPO}/pull/{number}" if number else
+               f"https://github.com/{REPO}/commit/{sha}")
+        e = {"pr": number, "url": url, "title": title, "author": author, "date": when[:10],
+             "sha": sha[:7], "branch": branch, "labels": [], "commits": [sha[:7]]}
+        items.append((e, " ".join([subject, branch, body])))
+    return items, total
 
 
 # ── GitHub and JIRA ───────────────────────────────────────────────────────────
@@ -191,12 +288,16 @@ def jira_issues(email, token, keys):
 
 # ── categories ────────────────────────────────────────────────────────────────
 
-UI_WORDS = r"\b(ui|ux|gui|screen|screens|button|modal|dialog|display|layout|icon|font|frontend|front-end|page|" \
-           r"theme|style|css|animation|toast|banner|menu|tab|keyboard|touch)\b"
-INFRA_WORDS = r"\b(ci|cd|build|pipeline|docker|deps|dependency|dependencies|lint|linter|tests?|testing|" \
+UI_WORDS = r"\b(ui|ux|gui|screen|screens|button|buttons|modal|modals|dialog|display|layout|icon|icons|font|fonts|" \
+           r"frontend|front-end|page|pages|theme|style|styles|css|animation|toast|banner|menu|tab|tabs|keyboard|" \
+           r"touch|nav|navbar|overlay|glyph|glyphs|figma|svg|pinpad|osk|countdown|tile|tiles|copy text|" \
+           r"video asset|dashboard|card|cards)\b"
+INFRA_WORDS = r"\b(ci|cd|build|pipeline|docker|deps|dependency|dependencies|lint|linter|linters|tests?|testing|" \
               r"tooling|script|scripts|refactor|chore|infra|infrastructure|github actions|workflow file|" \
-              r"logging|logs|metrics|monitoring|terraform|helm|makefile|cmake|bazel)\b"
-RELEASE_WORDS = r"(\brelease\b|\bbump(ed)? version\b|\bversion bump\b|\bchangelog\b|^v?\d+\.\d+\.\d+$)"
+              r"terraform|helm|makefile|cmake|bazel|codecov|coverage|pre-?commit|hook|hooks|nix|nixos|flake|" \
+              r"integration tests?|flaky|proto|buf|monitor-pr|localdev|hydra)\b"
+RELEASE_WORDS = r"(^release\b|\brelease (v|version)?\s*\d|\bbump(ed)? (to )?(the )?version\b|\bversion bump\b|" \
+                r"\bchangelog\b|^v?\d+\.\d+\.\d+$)"
 
 def categorize(title, branch, labels, tickets):
     text = " ".join([title, branch.replace("/", " ").replace("-", " ").replace("_", " "), " ".join(labels)]).lower()
@@ -222,9 +323,13 @@ def categorize(title, branch, labels, tickets):
 
 def generate(from_version, to_version, progress=lambda msg: None):
     creds = credentials()
-    if not (creds["github"] and creds["jira_email"] and creds["jira"]):
-        raise ChangeLogError("Add your GitHub and JIRA tokens first (Tokens…).")
+    if not (creds["jira_email"] and creds["jira"]):
+        raise ChangeLogError("Add your JIRA email and token first (Tokens…).")
     base, head = ref_of(from_version), ref_of(to_version)
+    if not creds["github"]:                       # no token: git over SSH
+        items, total = git_entries(base, head, progress)
+        entries = [dict(e, text=text) for e, text in items]
+        return _finish(from_version, to_version, base, head, total, entries, creds, progress)
     commits, total, status = compare(creds["github"], base, head, progress)
     if status == "behind":
         raise ChangeLogError(f"{to_version} is older than {from_version} — swap From and To.")
@@ -252,6 +357,11 @@ def generate(from_version, to_version, progress=lambda msg: None):
         if (c.get("author") or {}).get("login") and not e["author"]:
             e["author"] = c["author"]["login"]
         entries.append(e)
+    return _finish(from_version, to_version, base, head, total, entries, creds, progress)
+
+
+def _finish(from_version, to_version, base, head, total, entries, creds, progress):
+    """PROD tickets from JIRA, categories, and the change log record."""
     keys = {k.upper() for e in entries for k in KEY_RE.findall(e["text"])}
     progress(f"Looking up {len(keys)} PROD ticket{'s' if len(keys) != 1 else ''} in JIRA…")
     issues = jira_issues(creds["jira_email"], creds["jira"], keys) if keys else {}
@@ -262,7 +372,6 @@ def generate(from_version, to_version, progress=lambda msg: None):
                                             "labels": [], "components": []}), key=k,
                              url=f"{JIRA_SITE}/browse/{k}") for k in ks]
         e["category"] = categorize(e["title"], e["branch"], e["labels"], e["tickets"])
-    entries.sort(key=lambda e: (CATEGORIES.index(e["category"]), e["date"]), reverse=False)
     entries.sort(key=lambda e: e["date"], reverse=True)
     entries.sort(key=lambda e: CATEGORIES.index(e["category"]))
     return {"id": f"{from_version}..{to_version}", "repo": REPO, "from": from_version, "to": to_version,

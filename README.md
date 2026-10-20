@@ -200,11 +200,13 @@ New features · Improvements · Bug fixes · GUI / UX · Infrastructure & toolin
 tile to filter), and you can search by title, author, PR, PROD key or hash. A note lists tickets
 that aren't Done yet.
 
-**Making one (admin):** click **Make change logs (admin)…** / **Tokens…** once, and paste a GitHub
-token (fine-grained, VitalBio/device-sw, Contents + Pull requests read-only) and a JIRA API token
-with your email. They're kept in your Mac's Keychain, never in the sheet. Then pick **From** and
-**To** (the versions in the sheet, like `v4.19.3-a767250`, or any git hash) and click **Make change
-log**. It's saved in the sheet's hidden settings tab, so everyone sees it with no setup.
+**Making one (admin):** click **Make change logs (admin)…** / **Tokens…** once and enter your JIRA
+email and a JIRA API token (kept in your Mac's Keychain, never in the sheet). No GitHub token is
+needed: the app keeps a copy of device-sw's history (commits only) in its data folder and reads it
+with git over your existing SSH access to GitHub. (A GitHub token is optional: with one, PRs come
+from the GitHub API, which also reads PR descriptions for PROD keys.) Then pick **From** and **To**
+(the versions in the sheet, like `v4.19.3-a767250`, or any git hash) and click **Make change log**.
+It's saved in the sheet's hidden settings tab, so everyone sees it with no setup.
 
 How a PR's category is picked: a Jira *Bug* → Bug fixes; UI words (screen, button, layout…) → GUI /
 UX; *Story / Feature / Epic* → New features; CI, build, scripts, dependencies… → Infrastructure &
