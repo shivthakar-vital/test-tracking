@@ -191,6 +191,25 @@ renames it, adds cards, reorders or removes them, duplicates or deletes it.
   own copy** of it. **Stop sharing** takes it back to the admin's computer.
 - The export dialog has a **View** menu: export MAIN or any view. Profiles remember the view.
 
+## Change Log
+
+The **📝 Change Log** tab shows what changed between two software versions of
+[VitalBio/device-sw](https://github.com/VitalBio/device-sw): the PRs merged, who and when, and the
+**PROD** tickets each one touched (summary, type, priority, status, fix version). PRs are grouped as
+New features · Improvements · Bug fixes · GUI / UX · Infrastructure & tooling · Release (click a
+tile to filter), and you can search by title, author, PR, PROD key or hash. A note lists tickets
+that aren't Done yet.
+
+**Making one (admin):** click **Make change logs (admin)…** / **Tokens…** once, and paste a GitHub
+token (fine-grained, VitalBio/device-sw, Contents + Pull requests read-only) and a JIRA API token
+with your email. They're kept in your Mac's Keychain, never in the sheet. Then pick **From** and
+**To** (the versions in the sheet, like `v4.19.3-a767250`, or any git hash) and click **Make change
+log**. It's saved in the sheet's hidden settings tab, so everyone sees it with no setup.
+
+How a PR's category is picked: a Jira *Bug* → Bug fixes; UI words (screen, button, layout…) → GUI /
+UX; *Story / Feature / Epic* → New features; CI, build, scripts, dependencies… → Infrastructure &
+tooling; release / version-bump PRs → Release; anything else → Improvements.
+
 ## Admin: filters
 
 Click **⚙ Settings → 🔎 Filters…** (admin passcode) to choose which columns get a **filter**
@@ -310,6 +329,7 @@ To set up a new one (about 10 minutes):
 | `blocks.py` | Draws each kind of chart/list in a card, for both the dashboard and the export |
 | `sqldata.py` | The sheet as an in-memory SQLite database (tables per tab, and the runs/issues/resolutions/bugs views) |
 | `chartquery.py` | Query charts: the Simple form's SQL, and how a query result becomes a chart |
+| `changelog.py` | Change logs: GitHub compare → PRs → PROD tickets in JIRA → categories; saved in the sheet |
 | `export_report.py` | The snapshot export: arranges the cards and saves the PNG(s) and PDF |
 | `install.sh` | The one-line installer and updater |
 | `build_mac.sh` | Builds the `.app` |

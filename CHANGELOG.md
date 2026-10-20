@@ -1,5 +1,11 @@
 # What's new
 
+## 2.1.0 (testing)
+- **📝 Change Log** tab: what changed between two software versions — the PRs from VitalBio/device-sw and the PROD tickets they touched, in six categories, with search and a note on tickets that aren't Done. Made by the admin (GitHub + JIRA tokens), saved in the sheet for everyone.
+
+## 2.0.1
+- **Show blanks** on charts, with a name for them (e.g. *Unassigned*).
+
 ## 2.0.0 — the big update
 
 Everything from the 1.2.x test builds, now for everyone.
