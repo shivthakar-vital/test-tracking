@@ -1,7 +1,11 @@
 # What's new
 
-## 2.1.0 (testing)
-- **📝 Change Log** tab: what changed between two software versions — the PRs from VitalBio/device-sw and the PROD tickets they touched, in six categories, with search and a note on tickets that aren't Done. Made by the admin (GitHub + JIRA tokens), saved in the sheet for everyone.
+## 2.2.0
+- **📝 Change Log** tab: what changed between two software versions of VitalBio/device-sw — the PRs merged (who, when, hash) and the PROD tickets they touched (summary, type, priority, status, fix version).
+  - Tiles for **New features, Improvements, Bug fixes, GUI / UX, Infrastructure & tooling, Release**, and **In QA** (PRs whose JIRA ticket is in QA). Click a tile to filter.
+  - **Search** by title, author, PR, PROD key, or hash.
+  - A note lists tickets that aren't Done yet, and whether JIRA fix versions match the release.
+  - The admin makes change logs (pick From and To — the versions in the sheet, or any git hash); they're saved to the sheet, so everyone sees them with no setup.
 
 ## 2.0.1
 - **Show blanks** on charts, with a name for them (e.g. *Unassigned*).
