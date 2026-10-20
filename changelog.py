@@ -23,7 +23,7 @@ REPO = "VitalBio/device-sw"
 JIRA_SITE = "https://vitalbio.atlassian.net"
 JIRA_PROJECT = "PROD"
 CATEGORIES = ["New features", "Improvements", "Bug fixes", "GUI / UX", "Infrastructure & tooling", "Release"]
-CATEGORY_COLORS = {"New features": "#7F5AF0", "Improvements": "#0E8FB3", "Bug fixes": "#D03B3B",
+CATEGORY_COLORS = {"In QA": "#E87BA4", "New features": "#7F5AF0", "Improvements": "#0E8FB3", "Bug fixes": "#D03B3B",
                    "GUI / UX": "#F28E2B", "Infrastructure & tooling": "#7A7974", "Release": "#0CA30C"}
 PREFIX = "changelog:"
 CHUNK = 40000                      # characters per settings cell (Sheets allows 50,000)
@@ -377,6 +377,16 @@ def _finish(from_version, to_version, base, head, total, entries, creds, progres
     return {"id": f"{from_version}..{to_version}", "repo": REPO, "from": from_version, "to": to_version,
             "base": base, "head": head, "commits": total, "generated": datetime.now().isoformat(timespec="seconds"),
             "entries": entries}
+
+IN_QA = "In QA"
+
+def in_qa(ticket):
+    """A JIRA status that means it's waiting on QA ("QA", "In QA", "Ready for QA"…)."""
+    return "qa" in re.findall(r"[a-z]+", (ticket.get("status") or "").lower())
+
+def qa_entries(log):
+    return [e for e in log["entries"] if any(in_qa(t) for t in e["tickets"])]
+
 
 def warnings(log):
     """Tickets not Done yet, and fix versions that don't match the release (like the team's notes)."""

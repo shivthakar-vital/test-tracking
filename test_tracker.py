@@ -3432,11 +3432,12 @@ class ChangeLogPage(QWidget):
         self.tiles = QHBoxLayout()
         self.tiles.setSpacing(10)
         self.tile_btns = {}
-        for cat in changelog.CATEGORIES:
+        for cat in changelog.CATEGORIES + [changelog.IN_QA]:
             b = QPushButton()
             b.setCheckable(True)
             b.setMinimumHeight(72)
-            b.setToolTip(f"Show only {cat} (click again to show all)")
+            b.setToolTip("Show only PRs whose JIRA ticket is in QA (click again to show all)"
+                         if cat == changelog.IN_QA else f"Show only {cat} (click again to show all)")
             b.setStyleSheet(f"QPushButton {{ border-left:4px solid {changelog.CATEGORY_COLORS[cat]}; "
                             f"background:#FFFFFF; border-radius:8px; }}"
                             f"QPushButton:checked {{ background:#E1F5EE; border-color:#1D9E75; }}")
@@ -3562,6 +3563,7 @@ class ChangeLogPage(QWidget):
         counts = {c: 0 for c in changelog.CATEGORIES}
         for e in (log or {}).get("entries", []):
             counts[e["category"]] += 1
+        counts[changelog.IN_QA] = len(changelog.qa_entries(log)) if log else 0
         for c, b in self.tile_btns.items():
             b.num.setText(str(counts[c]))
             b.setEnabled(bool(log))
@@ -3578,8 +3580,12 @@ def change_log_html(log, search="", only=None):
     esc = html.escape
     q = search.strip().lower()
 
+    qa_ids = {id(e) for e in changelog.qa_entries(log)}
+
     def hit(e):
-        if only and e["category"] != only:
+        if only == changelog.IN_QA and id(e) not in qa_ids:
+            return False
+        if only and only != changelog.IN_QA and e["category"] != only:
             return False
         if not q:
             return True
@@ -3609,6 +3615,30 @@ from <code>git log {esc(log["base"][:7])}..{esc(log["head"][:7])}</code> and JIR
 <code style="font-size:14px">{esc(log["to"])}</code></td></tr></table>
 <table width="100%" cellspacing="0" cellpadding="10" style="margin-bottom:14px"><tr>
 <td bgcolor="#FFF6E5" style="border-left:4px solid #F28E2B; font-size:13px">{note}</td></tr></table>''']
+    # waiting on QA: the tickets, at the top (when not filtering to a category)
+    qa_tickets, seen = [], set()
+    for e in log["entries"]:
+        if id(e) in qa_ids and hit(e):
+            for t in e["tickets"]:
+                if changelog.in_qa(t) and t["key"] not in seen:
+                    seen.add(t["key"])
+                    qa_tickets.append((t, e))
+    if qa_tickets and only in (None, changelog.IN_QA):
+        color = changelog.CATEGORY_COLORS[changelog.IN_QA]
+        rows = "".join(
+            f'<tr><td style="padding:3px 10px 3px 0; white-space:nowrap"><a href="{esc(t["url"])}">{esc(t["key"])}</a></td>'
+            f'<td style="padding:3px 10px 3px 0">{esc(t["summary"])}</td>'
+            f'<td style="padding:3px 10px 3px 0; white-space:nowrap; color:#993556">{esc(t["status"])}</td>'
+            f'<td style="padding:3px 0; white-space:nowrap">'
+            + (f'<a href="{esc(e["url"])}">PR #{e["pr"]}</a>' if e.get("pr") else esc(e["sha"])) + "</td></tr>"
+            for t, e in qa_tickets)
+        out.append(f'<p style="font-size:16px; font-weight:bold; margin:16px 0 6px 0">'
+                   f'<span style="color:{color}">●</span> In QA '
+                   f'<span style="color:#8A8984; font-weight:normal">{len(qa_tickets)} ticket'
+                   f'{"s" if len(qa_tickets) != 1 else ""} waiting on QA</span></p>'
+                   f'<table width="100%" cellspacing="0" cellpadding="8" style="margin-bottom:8px"><tr>'
+                   f'<td bgcolor="#FCEFF4" style="border:1px solid #F4C0D1"><table cellspacing="0">{rows}'
+                   f'</table></td></tr></table>')
     for cat in changelog.CATEGORIES:
         items = [e for e in log["entries"] if e["category"] == cat and hit(e)]
         if not items:
