@@ -34,6 +34,7 @@ DEFAULT_JQL = ('summary ~"[QA Testing]" AND (assignee=712020:b928dc8a-87ce-4da9-
                'assignee=712020:46184db6-b6e8-4d2f-a4c3-4251420c5c3f) AND (status!=Done AND '
                'status!="Closed (Won\'t Do)") AND type=Testing')
 SYNC_MINUTES = 10
+SUPPORT_PROJECTS = ("V1P", "VKG")       # JIRA projects of Hardware Support Requests (VitalOne, Viking)
 CHUNK = 40000
 KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 PART_RE = re.compile(r"^\s*PT\s*(\d+)\s*[-–:]\s*", re.I)
@@ -88,18 +89,18 @@ def _lines(node, depth=0, out=None):
     out = [] if out is None else out
     t = node.get("type")
     if t in ("paragraph", "heading"):
-        s = _text(node).strip()
-        if s:
-            out.append(("  " * max(depth - 1, 0)) + s)
+        for s in _text(node).split("\n"):
+            if s.strip():
+                out.append(("  " * max(depth - 1, 0)) + s.strip())
         return out
     if t in ("bulletList", "orderedList"):
         for item in node.get("content", []) or []:
             first = True
             for ch in item.get("content", []) or []:
                 if ch.get("type") in ("paragraph", "heading") and first:
-                    s = _text(ch).strip()
-                    if s:
-                        out.append("  " * depth + "• " + s)
+                    for k, s in enumerate(x.strip() for x in _text(ch).split("\n")):
+                        if s:
+                            out.append("  " * depth + ("• " if k == 0 else "  ") + s)
                     first = False
                 else:
                     _lines(ch, depth + 1, out)
@@ -148,11 +149,12 @@ def sessions(description):
         full = _text(node)
         m = re.search(r"session\s*#?\s*(\d+)", full, re.I)
         info = {}
-        for key, pat in (("testers", r"Testers?[ \t]*:[ \t]*([^\n]*?)(?=\s*Date\s*:|\n|$)"),
+        for key, pat in (("testers", r"(?:Testers?|Operators?)[ \t]*:[ \t]*([^\n]*?)(?=[ \t]*Date[ \t]*:|\n|$)"),
                          ("date", r"Date[ \t]*:[ \t]*(\d{4}-\d{2}-\d{2})"),
-                         ("time", r"Date[ \t]*:[ \t]*\d{4}-\d{2}-\d{2}\s*,?\s*([^\n]*?)(?=\s*Build|\n|$)"),
-                         ("build", r"(?:Build|SW|Software Version)[ \t]*:[ \t]*([^\n]*?)(?=\s*Test System|\n|$)"),
-                         ("system", r"(?:Test System|Instrument|Test Instrument)[ \t]*:[ \t]*([^\n]*)")):
+                         ("time", r"Date[ \t]*:[ \t]*\d{4}-\d{2}-\d{2}[ \t]*,?[ \t]*([^\n]*?)(?=[ \t]*Build|\n|$)"),
+                         ("build", r"(?:Build|SW/FW version|SW version|Software Version|SW)[ \t]*:[ \t]*([^\n]*?)"
+                                   r"(?=[ \t]*Test System|\n|$)"),
+                         ("system", r"(?:Test System|Test Instrument|Instrument|(?<![\w/])System)[ \t]*:[ \t]*([^\n]*)")):
             mm = re.search(pat, full, re.I)
             info[key] = mm.group(1).strip(" ,") if mm else ""
         # the notes: what comes after "TEST NOTES" (or after the header lines)
@@ -163,16 +165,20 @@ def sessions(description):
                 started = True
                 continue
             if not started and (re.match(r"session\s*#?\s*\d+", s, re.I) or re.match(
-                    r"(tester|date|build|sw|software version|test system|instrument|test instrument)\b", s, re.I)):
+                    r"(•\s*)?(testers?|operators?|date|build|sw/fw version|sw version|sw|software version|test system|"
+                    r"system|instrument|test instrument)\b\s*:", s, re.I)):
                 continue
             notes.append(ln)
-        keys = list(dict.fromkeys(k for k in _keys(node) if k.startswith(changelog.JIRA_PROJECT + "-")))
+        linked = list(dict.fromkeys(_keys(node)))
+        keys = [k for k in linked if k.startswith(changelog.JIRA_PROJECT + "-")]
+        support = [k for k in linked if k.split("-")[0] in SUPPORT_PROJECTS]
         if not notes and (not info["build"] or re.search(r"x{3,}", info["build"], re.I) or not info["date"]):
             continue                         # an unfilled template panel, not a session
         out.append({"n": int(m.group(1)) if m else len(out) + 1, "_numbered": bool(m),
                     "date": info["date"], "time": info["time"],
                     "testers": [t.strip() for t in re.split(r",|&| and ", info["testers"]) if t.strip()],
-                    "build": info["build"], "system": info["system"], "notes": notes[:60], "bugs": keys})
+                    "build": info["build"], "system": info["system"], "notes": notes[:60], "bugs": keys,
+                    "support": support})
     return out
 
 
@@ -242,9 +248,34 @@ def fetch(query, progress=lambda m: None):
         t["product"] = product_of(t)
     return tickets
 
+def support_info(keys):
+    """{key: {summary, status, status_category}} for Hardware Support Requests, from JIRA."""
+    import requests
+    c = changelog.credentials()
+    keys = sorted(set(keys))
+    out = {}
+    for i in range(0, len(keys), 80):
+        batch = keys[i:i + 80]
+        try:
+            r = requests.post(f"{changelog.JIRA_SITE}/rest/api/3/search/jql", auth=(c["jira_email"], c["jira"]),
+                              headers={"Accept": "application/json", "Content-Type": "application/json"},
+                              json={"jql": f"key in ({', '.join(batch)})", "maxResults": 100,
+                                    "fields": ["summary", "status"]}, timeout=30)
+        except requests.RequestException:
+            continue
+        if not r.ok:
+            continue                          # e.g. a project the token can't see: keys still listed
+        for it in r.json().get("issues", []):
+            st = it["fields"].get("status") or {}
+            out[it["key"]] = {"summary": it["fields"].get("summary") or "", "status": st.get("name", ""),
+                              "status_category": (st.get("statusCategory") or {}).get("key", "")}
+    return out
+
 def snapshot(query, progress=lambda m: None):
-    return {"jql": query, "synced": datetime.now().isoformat(timespec="seconds"),
-            "tickets": fetch(query, progress)}
+    tickets = fetch(query, progress)
+    keys = [k for t in tickets for s in t["sessions"] for k in s.get("support", [])]
+    return {"jql": query, "synced": datetime.now().isoformat(timespec="seconds"), "tickets": tickets,
+            "support": support_info(keys) if keys else {}}
 
 
 # ── test efforts (clones of one ticket together) ──────────────────────────────
@@ -272,6 +303,7 @@ def efforts(testing):
                     "testers": list(dict.fromkeys(x for s in sess for x in s["testers"])),
                     "sessions": sess, "last": next((s["date"] for s in reversed(sess) if s["date"]), ""),
                     "bugs": list(dict.fromkeys(k for s in sess for k in s["bugs"])), "url": current["url"],
+                    "support": list(dict.fromkeys(k for s in sess for k in s.get("support", []))),
                     "key": current["key"], "updated": max(t["updated"] for t in ts)})
     out.sort(key=lambda e: (e["last"] or e["updated"] or ""), reverse=True)
     return out
@@ -303,7 +335,8 @@ def sessions_in(testing, rng):
 def to_rows(snap):
     """Rows for the hidden tab: a header, then one row per ticket as JSON (split over cells)."""
     rows = [["key", "updated", "data"], ["_meta", snap["synced"], json.dumps({"jql": snap["jql"],
-                                                                               "synced": snap["synced"]})]]
+                                                                               "synced": snap["synced"],
+                                                                               "support": snap.get("support", {})})]]
     for t in snap["tickets"]:
         text = json.dumps(t, separators=(",", ":"))
         rows.append([t["key"], t["updated"]] + [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)])

@@ -328,7 +328,8 @@ class Kit:
                     self.pill(p, tx, cy, r["tag"])
                     tx += tag_w + 14
                 avail = x + width - right_w - 16 - tx
-                main, note = r.get("text") or "", r.get("note") or ""
+                main = " ".join((r.get("text") or "").split())
+                note = " ".join((r.get("note") or "").split())
                 p.setFont(rf)
                 mw = rfm.horizontalAdvance(main)
                 if mw > avail:
@@ -723,8 +724,13 @@ class Painter(es.Renderer):
         today = date.today()
         stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
         bugs = list(dict.fromkeys(b for _, s in shown for b in s["bugs"]))
+        info = testing.get("support") or {}
+        hw = list(dict.fromkeys(x for _, s in shown for x in s.get("support", [])))
+        hw_open = [x for x in hw if (info.get(x) or {}).get("status_category") != "done"]
         body = [k.tiles([("Sessions", len(shown), ctx.range_text, "ink"),
                          ("Bugs linked", len(bugs), "from those sessions", "ink"),
+                         ("HW support requests", len(hw), f"{len(hw_open)} still open" if hw else "none made",
+                          "warn" if hw_open else "ink"),
                          ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width)]
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
         if self.opt("testing", "sessions"):
@@ -735,10 +741,12 @@ class Painter(es.Renderer):
                     first = next((ln.strip().lstrip("• ").strip() for ln in s["notes"] if ln.strip()), "")
                     meta = " · ".join(x for x in (", ".join(s["testers"]), s["build"] and "Build " + s["build"],
                                                   s["system"]) if x)
+                    hw_s = s.get("support", [])
                     rows.append(dict(link_html=jira(s["ticket"], f"S{s['n']}"), tag=e["product"],
                                      text=e["name"], note=meta + (f" · {first}" if first else ""),
-                                     right=day + (f" · {es._plural(len(s['bugs']), 'bug')}" if s["bugs"] else ""),
-                                     right_color="ink2"))
+                                     right=day + (f" · {es._plural(len(s['bugs']), 'bug')}" if s["bugs"] else "")
+                                     + (f" · {len(hw_s)} HW request" + ("s" if len(hw_s) != 1 else "") if hw_s else ""),
+                                     right_color="warn" if hw_s else "ink2"))
                 body.append(vstack([k.label("What We Tested", width), k.table(rows, width)], 6))
             else:
                 body.append(vstack([k.label("What We Tested", width),
@@ -756,6 +764,17 @@ class Painter(es.Renderer):
                                  right=e["status"],
                                  right_color="good" if e["status_category"] == "done" else "ink2"))
             body.append(vstack([k.label("Test Efforts", width), self._effort_rows(rows, width)], 6))
+        if hw:
+            rows = []
+            for x in hw:
+                t_ = info.get(x) or {}
+                sess = [(e, s) for e, s in shown if x in s.get("support", [])]
+                e0, s0 = sess[-1]                     # the session it was first logged in (in these dates)
+                rows.append(dict(link_html=self.link(x, f"{changelog.JIRA_SITE}/browse/{x}"), tag=e0["product"],
+                                 text=t_.get("summary") or e0["name"],
+                                 note=f"{e0['name']} · S{s0['n']}", right=t_.get("status") or "",
+                                 right_color="good" if t_.get("status_category") == "done" else "warn"))
+            body.append(vstack([k.label("Hardware Support Requests", width), k.table(rows, width)], 6))
         return "Feature Testing", "from JIRA Testing tickets", vstack(body, 20)
 
     def _effort_rows(self, rows, width):

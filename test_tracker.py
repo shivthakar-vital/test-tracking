@@ -3962,7 +3962,7 @@ class FeatureTestingPage(QWidget):
         th = lambda t, right=False: (f'<th align="{"right" if right else "left"}" style="color:#888885; '
                                      f'font-size:10px; padding:0 0 6px 14px">{t}</th>')
         rows = [f'<tr>{th("EFFORT")}{th("STATUS")}{th("ASSIGNEE")}{th("SESSIONS", True)}'
-                f'{th("LAST SESSION", True)}{th("BUGS", True)}</tr>']
+                f'{th("LAST SESSION", True)}{th("BUGS", True)}{th("HW REQUESTS", True)}</tr>']
         cell = lambda x, right=False, first=False: (
             f'<td valign="middle" align="{"right" if right else "left"}" style="border-top:1px solid #ECEAE6; '
             f'padding:9px 0 9px {0 if first else 14}px">{x}</td>')
@@ -3988,6 +3988,8 @@ class FeatureTestingPage(QWidget):
                         + cell(sessions, True)
                         + cell(f'<span style="color:{color}">{html.escape(last)}</span>', True)
                         + cell(str(len(e["bugs"])) if e["bugs"] else '<span style="color:#8A8984">—</span>', True)
+                        + cell(str(len(e.get("support", []))) if e.get("support") else
+                               '<span style="color:#8A8984">—</span>', True)
                         + "</tr>")
         return self._rich(f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows)}</table>', 12)
 
@@ -4040,6 +4042,9 @@ class FeatureTestingPage(QWidget):
         stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
         testers = {x for _, s in shown for x in s["testers"]}
         bugs = list(dict.fromkeys(k for _, s in shown for k in s["bugs"]))
+        info = testing.get("support") or {}
+        hw = list(dict.fromkeys(k for _, s in shown for k in s.get("support", [])))
+        hw_open = [k for k in hw if (info.get(k) or {}).get("status_category") != "done"]
 
         # Overview
         card, v = self._card("Overview", rtext)
@@ -4050,6 +4055,8 @@ class FeatureTestingPage(QWidget):
                 ("Efforts tested", len(tested), f"{len(active)} active in JIRA", INK),
                 ("Testers", len(testers), ", ".join(sorted(testers))[:40] or "—", INK),
                 ("Bugs linked", len(bugs), "from those sessions", INK),
+                ("HW support requests", len(hw), f"{len(hw_open)} still open" if hw else "none made",
+                 "#B26B00" if hw_open else INK),
                 ("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else INK)):
             tiles.addWidget(blocks._tile_widget(label, value, color, sub, None), 1)
         v.addLayout(tiles)
@@ -4079,6 +4086,14 @@ class FeatureTestingPage(QWidget):
             if s["bugs"]:
                 meta += " · Bugs: " + ", ".join(self._jira(k) for k in s["bugs"])
             bl.addWidget(self._rich(meta, 12, "#8A8984"))
+            for k in s.get("support", []):
+                t_ = info.get(k) or {}
+                done_ = t_.get("status_category") == "done"
+                bl.addWidget(self._rich(
+                    f'{self._pill("Hardware Support Request", "#FFF6E5", "#854F0B")}&nbsp; {self._jira(k)}'
+                    + (f' {html.escape(t_["summary"])}' if t_.get("summary") else "")
+                    + (f'&nbsp; {self._pill(t_["status"], "#E3F4E1" if done_ else "#F1EFE8", "#0B7A0B" if done_ else "#52514E")}'
+                       if t_.get("status") else ""), 12))
             notes = "".join(f'<div style="margin-left:{14 * ((len(ln) - len(ln.lstrip())) // 2)}px">'
                             f'{_linkify(ln.strip())}</div>' for ln in s["notes"][:16])
             if len(s["notes"]) > 16:

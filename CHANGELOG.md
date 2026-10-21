@@ -3,7 +3,8 @@
 ## 2.3.2
 - **🧪 Feature Testing** is redesigned in sections like the dashboard: **Overview**, **What We Tested** (grouped by day), **Tested in These Dates**, and **Not Tested in These Dates** (active efforts with no session in the dates — including new tickets with no sessions logged yet, marked **New**).
 - The **Dates** filter now shows on the Feature Testing tab too (the same dates as the dashboard).
-- Sessions are also read from JIRA's **Test Notes** field (not only the description), with either set of labels: Build or Software Version, Test System or Instrument, TEST NOTES or Details. Unfilled template panels are skipped.
+- Sessions are also read from JIRA's **Test Notes** field (not only the description), with either set of labels: Build or Software Version, Test System or Instrument, TEST NOTES or Details. Unfilled template panels are skipped. Also understands Operator, System, and SW/FW version.
+- **Hardware Support Requests**: a V1P- or VKG- ticket linked in a session's notes marks that session as having a Hardware Support Request — shown on the session (with the request's title and status from JIRA), counted in Overview, listed in the export, and in SQL (`test_sessions.hw_requests`).
 
 ## 2.3.1
 - **🧪 Feature Testing**, from JIRA's Testing tickets (your JQL; the admin can change it with **JQL…**). The app reads every **session panel** testers log in a ticket — date, testers, build, test system, notes, and the PROD bugs linked — and treats clones of one ticket (PT2, PT3…) as one test effort.
