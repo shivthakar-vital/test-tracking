@@ -126,6 +126,18 @@ def _keys(node, out=None):
         _keys(ch, out)
     return out
 
+def _merge(found):
+    """Sessions from the description and the Test Notes field, in date order, numbered
+    when they don't say their number."""
+    found.sort(key=lambda s: (s["date"] or "9999", s["n"]))
+    seen = set()
+    for i, s in enumerate(found, start=1):
+        if s.get("_numbered") is False or s["n"] in seen:
+            s["n"] = i
+        seen.add(s["n"])
+        s.pop("_numbered", None)
+    return found
+
 def sessions(description):
     """Every session panel in a ticket's description, in order."""
     out = []
@@ -136,25 +148,29 @@ def sessions(description):
         full = _text(node)
         m = re.search(r"session\s*#?\s*(\d+)", full, re.I)
         info = {}
-        for key, pat in (("testers", r"Testers?\s*:\s*([^\n]+?)(?=\s*Date\s*:|\n|$)"),
-                         ("date", r"Date\s*:\s*(\d{4}-\d{2}-\d{2})"),
-                         ("time", r"Date\s*:\s*\d{4}-\d{2}-\d{2}\s*,?\s*([^\n]*?)(?=\s*Build|\n|$)"),
-                         ("build", r"(?:Build|SW)\s*:\s*([^\n]+?)(?=\s*Test System|\n|$)"),
-                         ("system", r"Test System\s*:\s*([^\n]+)")):
+        for key, pat in (("testers", r"Testers?[ \t]*:[ \t]*([^\n]*?)(?=\s*Date\s*:|\n|$)"),
+                         ("date", r"Date[ \t]*:[ \t]*(\d{4}-\d{2}-\d{2})"),
+                         ("time", r"Date[ \t]*:[ \t]*\d{4}-\d{2}-\d{2}\s*,?\s*([^\n]*?)(?=\s*Build|\n|$)"),
+                         ("build", r"(?:Build|SW|Software Version)[ \t]*:[ \t]*([^\n]*?)(?=\s*Test System|\n|$)"),
+                         ("system", r"(?:Test System|Instrument|Test Instrument)[ \t]*:[ \t]*([^\n]*)")):
             mm = re.search(pat, full, re.I)
             info[key] = mm.group(1).strip(" ,") if mm else ""
         # the notes: what comes after "TEST NOTES" (or after the header lines)
         notes, started = [], False
         for ln in lines:
             s = ln.strip()
-            if re.match(r"test notes\s*:?\s*$", s, re.I):
+            if re.match(r"(test notes|details|notes)\s*:?\s*$", s, re.I):
                 started = True
                 continue
-            if not started and (re.match(r"session\s*#?\s*\d+", s, re.I) or re.match(r"(tester|date|build|sw|test system)", s, re.I)):
+            if not started and (re.match(r"session\s*#?\s*\d+", s, re.I) or re.match(
+                    r"(tester|date|build|sw|software version|test system|instrument|test instrument)\b", s, re.I)):
                 continue
             notes.append(ln)
         keys = list(dict.fromkeys(k for k in _keys(node) if k.startswith(changelog.JIRA_PROJECT + "-")))
-        out.append({"n": int(m.group(1)) if m else len(out) + 1, "date": info["date"], "time": info["time"],
+        if not notes and (not info["build"] or re.search(r"x{3,}", info["build"], re.I) or not info["date"]):
+            continue                         # an unfilled template panel, not a session
+        out.append({"n": int(m.group(1)) if m else len(out) + 1, "_numbered": bool(m),
+                    "date": info["date"], "time": info["time"],
                     "testers": [t.strip() for t in re.split(r",|&| and ", info["testers"]) if t.strip()],
                     "build": info["build"], "system": info["system"], "notes": notes[:60], "bugs": keys})
     return out
@@ -162,15 +178,33 @@ def sessions(description):
 
 # ── JIRA ──────────────────────────────────────────────────────────────────────
 
+NOTES_FIELD_NAME = "Test Notes"          # testers also log sessions in this field's panels
+NOTES_FIELD_FALLBACK = "customfield_11103"
+
+def notes_field(auth):
+    """The id of JIRA's "Test Notes" field."""
+    import requests
+    try:
+        r = requests.get(f"{changelog.JIRA_SITE}/rest/api/3/field", auth=auth, timeout=30)
+        if r.ok:
+            for f in r.json():
+                if (f.get("name") or "").strip().lower() == NOTES_FIELD_NAME.lower():
+                    return f["id"]
+    except Exception:
+        pass
+    return NOTES_FIELD_FALLBACK
+
 def fetch(query, progress=lambda m: None):
-    """[ticket] for a JQL search, with their sessions."""
+    """[ticket] for a JQL search, with their sessions (from the description and the
+    Test Notes field)."""
     import requests
     c = changelog.credentials()
     if not (c["jira_email"] and c["jira"]):
         raise changelog.ChangeLogError("Add your JIRA email and token first (Change Log → Tokens…).")
     tickets, token = [], None
+    notes_id = notes_field((c["jira_email"], c["jira"]))
     fields = ["summary", "status", "assignee", "created", "updated", "labels", "parent", "fixVersions",
-              "description", "issuelinks"]
+              "description", "issuelinks", notes_id]
     while True:
         progress(f"Reading Testing tickets from JIRA ({len(tickets)} so far)…")
         body = {"jql": query, "maxResults": 50, "fields": fields}
@@ -200,7 +234,7 @@ def fetch(query, progress=lambda m: None):
                 "labels": f.get("labels") or [], "parent": (f.get("parent") or {}).get("key", ""),
                 "parent_summary": ((f.get("parent") or {}).get("fields") or {}).get("summary", ""),
                 "fix_versions": [v["name"] for v in f.get("fixVersions") or []],
-                "sessions": sessions(f.get("description"))})
+                "sessions": _merge(sessions(f.get("description")) + sessions(f.get(notes_id)))})
         token = data.get("nextPageToken")
         if not token or data.get("isLast", True) or len(tickets) >= 500:
             break
