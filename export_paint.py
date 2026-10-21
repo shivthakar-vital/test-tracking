@@ -431,6 +431,7 @@ class Painter(es.Renderer):
                     parts.append(k.donut(slices, self.done_pct(slices), "passed", w))
                 else:
                     parts.append(k.note(f"No runs in {ctx.range_text}.", w))
+            if self.opt("e2e", "tiles"):
                 week = self._week_runs(tabs)
                 fixes = [e for t in tabs for e in store.resolutions(t, ctx.all_rows(t), ctx.rng)]
                 open_ = [e for e in fixes if e[1] is None]
@@ -442,7 +443,7 @@ class Painter(es.Renderer):
                      else "none open", "warn" if open_ else "ink")], w))
             return vstack(parts, 16)
 
-        body = [self.groups_cols(width, product)]
+        body = [self.groups_cols(width, product)] if self.opt("e2e", "status") or self.opt("e2e", "tiles") else []
         if self.opt("e2e", "versions"):
             body.append(self._version_bars(width))
         if self.opt("e2e", "days"):
@@ -451,6 +452,8 @@ class Painter(es.Renderer):
             body.append(self._platform_bars(width))
         if self.opt("e2e", "failed"):
             body.append(self._failed(width))
+        if not body:
+            return None
         names = " and ".join(n for n, _ in self.runs)
         return "End-to-End Runs", names, vstack(body, 22)
 
@@ -645,8 +648,9 @@ class Painter(es.Renderer):
             new_open = [r for r in bugs.new if not done(r)]
             sub = f"{len(bugs.new)} new · {len(new_open)} still open · {len(bugs.closed)} closed"
             items = [k.product(name or "All products", sub, w)]
-            items.append(self._bug_table(bugs, new_open, bugs.made, w, product_of if not name else None,
-                                         f"No open new bugs in {ctx.range_text}."))
+            if self.opt("bugs", "open"):
+                items.append(self._bug_table(bugs, new_open, bugs.made, w, product_of if not name else None,
+                                             f"No open new bugs in {ctx.range_text}."))
             if self.opt("bugs", "closed"):
                 items.append(k.label("Closed", w))
                 items.append(self._bug_table(bugs, bugs.closed, bugs.done_col, w, product_of if not name else None,
@@ -750,12 +754,14 @@ class Painter(es.Renderer):
         info = testing.get("support") or {}
         hw = list(dict.fromkeys(x for _, s in shown for x in s.get("support", [])))
         hw_open = [x for x in hw if (info.get(x) or {}).get("status_category") != "done"]
-        body = [k.tiles([("Sessions", len(shown), ctx.range_text, "ink"),
+        body = []
+        if self.opt("testing", "overview"):
+            body.append(k.tiles([("Sessions", len(shown), ctx.range_text, "ink"),
                          ("New bugs", len(new_bugs), f"{len(seen_bugs)} seen again" if seen_bugs else "found in testing",
                           "link" if new_bugs else "ink"),
                          ("HW support requests", len(hw), f"{len(hw_open)} still open" if hw else "none made",
                           "warn" if hw_open else "ink"),
-                         ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width)]
+                         ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width))
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
         if self.opt("testing", "sessions"):
             if shown:
@@ -800,9 +806,9 @@ class Painter(es.Renderer):
                               tag="New" if b in new_bugs else "Seen again", text=b_.get("summary") or e0["name"],
                               note=f"{e0['name']} · S{s0['n']}", right=b_.get("status") or "",
                               right_color="good" if b_.get("status_category") == "done" else "ink2"))
-        if found:
+        if found and self.opt("testing", "found"):
             body.append(vstack([k.label("Bugs From Testing", width), k.table(found, width)], 6))
-        if hw:
+        if hw and self.opt("testing", "hw"):
             rows = []
             for x in hw:
                 t_ = info.get(x) or {}
@@ -813,6 +819,8 @@ class Painter(es.Renderer):
                                  note=f"{e0['name']} · S{s0['n']}", right=t_.get("status") or "",
                                  right_color="good" if t_.get("status_category") == "done" else "warn"))
             body.append(vstack([k.label("Hardware Support Requests", width), k.table(rows, width)], 6))
+        if not body:
+            return None
         return "Feature Testing", "from JIRA Testing tickets", vstack(body, 20)
 
     def _effort_rows(self, rows, width):
@@ -831,9 +839,10 @@ class Painter(es.Renderer):
         tiles = [(c, counts.get(c, 0), "", "ink") for c in changelog.CATEGORIES]
         qa = [(t, e) for e in changelog.qa_entries(log) for t in e["tickets"] if changelog.in_qa(t)]
         body = [k.text(f"{log['from']}  →  {log['to']}   ·   {log['commits']} commits · {len(log['entries'])} PRs",
-                       width, 15, "ink2"),
-                vstack([k.tiles(tiles[:3], width), k.tiles(tiles[3:], width)], 10)]
-        if qa:
+                       width, 15, "ink2")]
+        if self.opt("changelog", "counts"):
+            body.append(vstack([k.tiles(tiles[:3], width), k.tiles(tiles[3:], width)], 10))
+        if qa and self.opt("changelog", "qa"):
             body.append(vstack([k.label(f"In QA ({len(qa)})", width), self._bug_rows(
                 [dict(link_html=self.link(t["key"], t["url"]), text=t["summary"], right=t["status"]) for t, _ in qa],
                 width)], 6))

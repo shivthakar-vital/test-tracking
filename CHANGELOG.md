@@ -1,5 +1,14 @@
 # What's new
 
+## 2.3.3
+- **A checkbox for every part of the export.** New ones:
+  - End-to-End: **Run Counts** (the Runs and Unresolved tiles, apart from the Run Status chart)
+  - New Bugs: **Open New Bugs**
+  - Feature Testing: **Overview Tiles**, **Bugs From Testing**, **Hardware Support Requests**
+  - Change Log: **Category Counts**, **In QA**
+
+  A section with all its boxes unticked is left out of the export. Saved profiles keep their choices; the new boxes start ticked.
+
 ## 2.3.2
 - **🧪 Feature Testing** is redesigned in sections like the dashboard: **Overview**, **What We Tested** (grouped by day), **Tested in These Dates**, and **Not Tested in These Dates** (active efforts with no session in the dates — including new tickets with no sessions logged yet, marked **New**).
 - The **Dates** filter now shows on the Feature Testing tab too (the same dates as the dashboard).

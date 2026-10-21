@@ -180,7 +180,8 @@ class Snapshot:
         self.planned = []
         self.sections = export_sections.normalized(sections) if sections is not None else None
         if self.sections is not None:              # the simple export: sections, not cards
-            on = [sid for sid in self.sections["order"] if self.sections["on"].get(sid)]
+            on = [sid for sid in self.sections["order"] if self.sections["on"].get(sid)
+                  and (not self.sections["opts"].get(sid) or any(self.sections["opts"][sid].values()))]  # all unticked: skip
             self.planned = [{"key": "section:" + sid, "section": sid, "i": i} for i, sid in enumerate(on)]
             self.kpis = export_sections.kpis(data, self.ctx, self.sections)
         for i, (card, tabs, chosen) in enumerate([] if self.sections is not None

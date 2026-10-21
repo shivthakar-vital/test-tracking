@@ -28,14 +28,18 @@ INK, INK2, MUTED, LINK = "#1A1A18", "#52514E", "#8A8984", "#2F5E9E"
 NEUTRAL = "#888780"
 
 SECTIONS = {
-    "e2e":       ("End-to-End Runs", [("status", "Run Status", True), ("versions", "Runs Per Software Version", True),
+    "e2e":       ("End-to-End Runs", [("status", "Run Status", True), ("tiles", "Run Counts", True),
+                                      ("versions", "Runs Per Software Version", True),
                                       ("failed", "Failed Runs", True), ("days", "Pass Rate By Day", False),
                                       ("platform", "Coder vs Atlantis", False)]),
     "errors":    ("Error Analysis", [("reason", "Reason", True), ("subsystem", "Subsystem", True),
                                      ("notes", "Unresolved With Notes", False)]),
-    "bugs":      ("New Bugs", [("closed", "Show Closed Bugs", False), ("allstatus", "All-Bugs Status", False)]),
-    "testing":   ("Feature Testing", [("sessions", "What We Tested", True), ("efforts", "Test Efforts", True)]),
-    "changelog": ("Change Log", []),
+    "bugs":      ("New Bugs", [("open", "Open New Bugs", True), ("closed", "Closed Bugs", False),
+                               ("allstatus", "All-Bugs Status", False)]),
+    "testing":   ("Feature Testing", [("overview", "Overview Tiles", True), ("sessions", "What We Tested", True),
+                                      ("efforts", "Test Efforts", True), ("found", "Bugs From Testing", True),
+                                      ("hw", "Hardware Support Requests", True)]),
+    "changelog": ("Change Log", [("counts", "Category Counts", True), ("qa", "In QA", True)]),
 }
 
 def default_config():
@@ -175,7 +179,8 @@ class Renderer:
                          '<td width="8"></td>' +
                          _tile("Unresolved", len(open_), f"oldest {_plural(oldest, 'day')}" if oldest is not None
                                else "none open", "#B26B00" if open_ else INK) + "</tr></table>")
-                out.append(f'<p style="margin:0 0 8px 0">{tiles}</p>')
+                if self.opt("e2e", "tiles"):
+                    out.append(f'<p style="margin:0 0 8px 0">{tiles}</p>')
                 out.append(f'{_label("Run Status")}' + (donut or f'<span style="color:{MUTED}">No runs in '
                                                                  f'{esc(ctx.range_text)}.</span>'))
             if self.opt("e2e", "versions"):
@@ -336,8 +341,9 @@ class Renderer:
                     f'{len(bugs.new)} new · {len(bugs.closed)} closed · {len(bugs.open)} open</span>')
             out = [f'<p style="font-size:14px; font-weight:bold; margin:8px 0 6px 0">{esc(name or "All products")} '
                    f'{head}</p>']
-            out.append(self._bug_rows(bugs, bugs.new, bugs.made, product if not name else None,
-                                      f"No new bugs in {ctx.range_text}."))
+            if self.opt("bugs", "open"):
+                out.append(self._bug_rows(bugs, bugs.new, bugs.made, product if not name else None,
+                                          f"No new bugs in {ctx.range_text}."))
             if self.opt("bugs", "closed"):
                 out.append(f'<p style="margin:10px 0 2px 0">{_label("Closed")}</p>')
                 out.append(self._bug_rows(bugs, bugs.closed, bugs.done_col, product if not name else None,
