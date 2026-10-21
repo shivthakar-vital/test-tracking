@@ -182,7 +182,7 @@ class Kit:
     # charts ──────────────────────────────────────────────────────────────────
 
     def donut(self, slices, big, small, width, d=84):
-        slices = [(pretty(l), n, c) for l, n, c in slices if n > 0]
+        slices = [(l or "No status", n, c) for l, n, c in slices if n > 0]      # exactly as in the sheet
         total = sum(n for _, n, _ in slices) or 1
         lf = font(14)
         fm = QFontMetrics(lf)
@@ -661,7 +661,7 @@ class Painter(es.Renderer):
         fw = 112
         rf = font(15)
         rfm = QFontMetrics(rf)
-        pill_w = max(QFontMetrics(font(13)).horizontalAdvance(pretty(r["right"])) + 20 for r in rows)
+        pill_w = max(QFontMetrics(font(13)).horizontalAdvance(r["right"]) + 20 for r in rows)
         avail = width - fw - pill_w - 20
         line = rfm.lineSpacing()
 
@@ -701,7 +701,7 @@ class Painter(es.Renderer):
                 p.setPen(k.c("ink"))
                 for j, t in enumerate(texts[i]):
                     p.drawText(QRectF(x + fw, top + j * line, avail, line), Qt.AlignVCenter | Qt.AlignLeft, t)
-                k.pill(p, x + width - pill_w, top + line / 2, pretty(r["right"]))
+                k.pill(p, x + width - pill_w, top + line / 2, r["right"])
                 ry += row_h
         return Item(sum(heights), draw)
 

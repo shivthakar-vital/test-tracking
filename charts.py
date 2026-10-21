@@ -17,6 +17,20 @@ from PyQt5.QtGui import QPainter, QColor, QPen, QPainterPath, QFont, QFontMetric
 
 SURFACE = "#FFFFFF"
 INK, INK2, MUTED, GRID = "#1A1A18", "#52514E", "#999996", "#ECEAE6"
+HOVER, TRACK = "#F3F2EF", "#E0DDD8"           # hovered legend row; the empty part of a mini bar
+
+_LIGHT = dict(SURFACE="#FFFFFF", INK="#1A1A18", INK2="#52514E", MUTED="#999996", GRID="#ECEAE6",
+              HOVER="#F3F2EF", TRACK="#E0DDD8")
+_DARK = dict(SURFACE="#262624", INK="#ECEAE4", INK2="#C2C0B9", MUTED="#8E8C86", GRID="#3A3936",
+             HOVER="#33322F", TRACK="#3A3936")
+
+def set_theme(dark):
+    """Chart text, gridlines and backgrounds for the app's light or dark look.
+    (Exports always draw their charts light: see export_report.)"""
+    globals().update(_DARK if dark else _LIGHT)
+
+def is_dark():
+    return SURFACE == _DARK["SURFACE"]
 
 # Status colors: meaning first (done / blocked / in progress…), then a fixed
 # categorical order for anything the keywords don't recognise.
@@ -288,7 +302,7 @@ class DonutChart(_Chart):
             hovered = hv == i
             if hovered:
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor("#F3F2EF"))
+                p.setBrush(QColor(HOVER))
                 p.drawRoundedRect(row, 5, 5)
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(color))
@@ -441,7 +455,7 @@ class MiniBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor("#E0DDD8"))
+        p.setBrush(QColor(TRACK))
         p.drawRoundedRect(QRectF(self.rect()), 4, 4)
         total = sum(n for _, n, _ in self.segs)
         if not total:
@@ -519,7 +533,7 @@ class ComponentTally(_Chart):
                 i = len(self._marks)
                 if self._hover == i:
                     p.setPen(Qt.NoPen)
-                    p.setBrush(QColor("#F3F2EF"))
+                    p.setBrush(QColor(HOVER))
                     p.drawRoundedRect(row, 4, 4)
                 if n:                                   # a light bar sized by count
                     bar = QColor(color)

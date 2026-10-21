@@ -44,6 +44,7 @@ import export_sections
 import layout
 import sqldata
 import tracker_store as store
+import ui_theme
 import views
 
 APP_TITLE   = "Test Tracker"
@@ -300,6 +301,16 @@ class SettingsDialog(QDialog):
         root.addWidget(_small_label("Admin"))
         root.addLayout(admin_row)
         root.addSpacing(6)
+        self.appearance = QComboBox()
+        for label, key in (("Light", "light"), ("Dark", "dark"), ("Match macOS", "system")):
+            self.appearance.addItem(label, key)
+        self.appearance.setCurrentIndex(max(self.appearance.findData(cfg.get("appearance", "light")), 0))
+        look = QHBoxLayout()
+        look.addWidget(_small_label("Appearance"))
+        look.addWidget(self.appearance)
+        look.addWidget(_small_label("Applies when the app restarts. Exports have their own theme.", MUTED), 1)
+        root.addSpacing(6)
+        root.addLayout(look)
         ver_row = QHBoxLayout()
         ver_row.addWidget(_small_label(f"App version v{APP_VERSION}"
                                        + (" (testing build)" if APP_CHANNEL == "testing" else ""), MUTED))
@@ -2754,6 +2765,7 @@ class ExportDialog(QDialog):
 
     def _same(self, a, b):
         keys = ("preset", "style", "picks", "arrangement", "folder", "view", "content", "sections", "theme")
+        keys = [k for k in keys if k in (b or {})]   # profiles saved before an option existed don't count it
         norm = lambda s: json.dumps({k: (s or {}).get(k) for k in keys}, sort_keys=True)
         return norm(a) == norm(b)
 
@@ -4673,7 +4685,15 @@ class TrackerApp(QMainWindow):
         if dlg._new_creds:
             store.install_credentials(dlg._new_creds)
         self.cfg["sheets"] = dlg.sheets
+        look = dlg.appearance.currentData()
+        look_changed = look != self.cfg.get("appearance", "light")
+        self.cfg["appearance"] = look
         store.save_config(self.cfg)
+        if look_changed and QMessageBox.question(
+                self, "Appearance", "Restart Test Tracker now to switch its look?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) == QMessageBox.Yes:
+            self._restart()
+            return
         urls = [s["url"] for s in dlg.sheets]
         new = getattr(dlg, "new_url", None)
         target = new if new in urls else (self.url if self.url in urls else (urls[0] if urls else ""))
@@ -5239,6 +5259,15 @@ class TrackerApp(QMainWindow):
         if reply == QMessageBox.Yes:
             self._run_installer(r["zip"])
 
+    def _restart(self):
+        """Quit and open the app again (e.g. to switch light / dark)."""
+        if getattr(sys, "frozen", False) and sys.platform == "darwin":
+            bundle = os.path.abspath(os.path.join(os.path.dirname(sys.executable), "..", ".."))
+            subprocess.Popen(["/bin/sh", "-c", f'sleep 1; open -n "{bundle}"'], start_new_session=True)
+        else:
+            subprocess.Popen([sys.executable] + sys.argv, start_new_session=True)
+        QTimer.singleShot(200, QApplication.quit)
+
     def closeEvent(self, event):
         self.pool.waitForDone(5000)     # let an in-flight save finish
         super().closeEvent(event)
@@ -5264,7 +5293,9 @@ if __name__ == "__main__":
     app.setApplicationName(APP_TITLE)
     app.setApplicationVersion(APP_VERSION)
     app.setStyle("Fusion")   # consistent look on all platforms including macOS
-    app.setPalette(_light_palette())
+    dark_mode = ui_theme.wants_dark(store.load_config().get("appearance", "light"))
+    ui_theme.install(dark_mode, modules=[sys.modules[__name__], blocks])
+    app.setPalette(ui_theme.palette() if dark_mode else _light_palette())
     window = TrackerApp()
     window.show()
     sys.exit(app.exec_())

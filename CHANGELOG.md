@@ -7,7 +7,8 @@
   - **New Bugs**: the bugs opened in the dates you pick; optional Closed Bugs and All-Bugs Status.
   - **Change Log**: the latest one, with its category counts and what's In QA.
 - **Products**: show VitalOne, Viking, or both — **side by side** or **combined** — across every section.
-- A cleaner, designed look: small donuts with compact legends, rounded number tiles, thin bars, pill tags. **Light or dark** theme.
+- A cleaner, designed look: small donuts with compact legends, rounded number tiles, thin bars, pill tags. **Light or dark** theme. Statuses show exactly as written in the sheet.
+- **Dark mode for the app**: ⚙ Settings → Appearance → Light, Dark, or Match macOS.
 - **New Bugs** lists only the new bugs that are still open (not Done or Closed (Won't Do)).
 - The card-by-card picker is still there as **Content → Cards (advanced)**. Profiles remember everything.
 - Fix: the dashboard's **Per day** charts showed "Couldn't draw this chart".

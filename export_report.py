@@ -155,8 +155,16 @@ class Snapshot:
     Cards it doesn't mention go to the shortest column; columns left empty are dropped,
     and the last card of each column stretches so the columns end flush."""
 
-    def __init__(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="wide",
-                 arrangement=None, entries=None, sections=None, theme="light"):
+    def __init__(self, *args, **kwargs):
+        was_dark = charts.is_dark()
+        charts.set_theme(False)                  # exports draw their charts light, whatever the app's look
+        try:
+            self._build(*args, **kwargs)
+        finally:
+            charts.set_theme(was_dark)
+
+    def _build(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="wide",
+               arrangement=None, entries=None, sections=None, theme="light"):
         self.data, self.rng, self.range_text, self.style = data, rng, range_text, style
         # dark is for the drawn sections; the advanced card export is light only
         self.theme = theme if theme in export_paint.THEMES and sections is not None else "light"
