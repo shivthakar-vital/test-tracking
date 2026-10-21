@@ -210,7 +210,7 @@ class Database:
         T = ["key", "url", "effort", "part", "summary", "product", "status", "status_category", "assignee",
              "created", "updated", "sessions", "last_session", "bugs"]
         S = ["key", "url", "effort", "product", "session", "date", "time", "testers", "build", "system",
-             "notes", "bugs", "hw_requests"]
+             "notes", "bugs", "new_bugs", "seen_bugs", "hw_requests"]
         trows, srows = [], []
         for t in testing.get("tickets", []):
             ss = t.get("sessions", [])
@@ -221,7 +221,10 @@ class Database:
             for x in ss:
                 srows.append([t["key"], t["url"], t["effort"], t.get("product"), x["n"], x["date"] or None, x["time"],
                               ", ".join(x["testers"]), x["build"], x["system"], "\n".join(x["notes"]),
-                              ", ".join(x["bugs"]), ", ".join(x.get("support", []))])
+                              ", ".join(x["bugs"]),
+                              ", ".join(b for b in x["bugs"] if feature_testing.bug_kind(self.data.get("settings"), t["key"], x, b) == "new"),
+                              ", ".join(b for b in x["bugs"] if feature_testing.bug_kind(self.data.get("settings"), t["key"], x, b) == "seen"),
+                              ", ".join(x.get("support", []))])
         self._create("testing", T, trows)
         self._create("test_sessions", S, srows)
         self.views["testing"], self.views["test_sessions"] = T, S

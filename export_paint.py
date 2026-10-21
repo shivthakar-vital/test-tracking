@@ -723,12 +723,18 @@ class Painter(es.Renderer):
         active = [e for e in efforts if e["status_category"] != "done"]
         today = date.today()
         stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
-        bugs = list(dict.fromkeys(b for _, s in shown for b in s["bugs"]))
+        bug_info = testing.get("bug_info") or {}
+        settings = self.data.get("settings") or {}
+        kind = lambda s, b: ft.bug_kind(settings, s["ticket"], s, b)
+        new_bugs = list(dict.fromkeys(b for _, s in shown for b in s["bugs"] if kind(s, b) == "new"))
+        seen_bugs = [b for b in dict.fromkeys(b for _, s in shown for b in s["bugs"] if kind(s, b) == "seen")
+                     if b not in new_bugs]
         info = testing.get("support") or {}
         hw = list(dict.fromkeys(x for _, s in shown for x in s.get("support", [])))
         hw_open = [x for x in hw if (info.get(x) or {}).get("status_category") != "done"]
         body = [k.tiles([("Sessions", len(shown), ctx.range_text, "ink"),
-                         ("Bugs linked", len(bugs), "from those sessions", "ink"),
+                         ("New bugs", len(new_bugs), f"{len(seen_bugs)} seen again" if seen_bugs else "found in testing",
+                          "link" if new_bugs else "ink"),
                          ("HW support requests", len(hw), f"{len(hw_open)} still open" if hw else "none made",
                           "warn" if hw_open else "ink"),
                          ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width)]
@@ -742,11 +748,15 @@ class Painter(es.Renderer):
                     meta = " · ".join(x for x in (", ".join(s["testers"]), s["build"] and "Build " + s["build"],
                                                   s["system"]) if x)
                     hw_s = s.get("support", [])
+                    n_new = sum(kind(s, b) == "new" for b in s["bugs"])
+                    n_seen = len(s["bugs"]) - n_new
+                    extra = [x for x in (f"{n_new} new bug" + ("s" if n_new != 1 else "") if n_new else "",
+                                         f"{n_seen} seen" if n_seen else "",
+                                         f"{len(hw_s)} HW request" + ("s" if len(hw_s) != 1 else "") if hw_s else "") if x]
                     rows.append(dict(link_html=jira(s["ticket"], f"S{s['n']}"), tag=e["product"],
                                      text=e["name"], note=meta + (f" · {first}" if first else ""),
-                                     right=day + (f" · {es._plural(len(s['bugs']), 'bug')}" if s["bugs"] else "")
-                                     + (f" · {len(hw_s)} HW request" + ("s" if len(hw_s) != 1 else "") if hw_s else ""),
-                                     right_color="warn" if hw_s else "ink2"))
+                                     right=" · ".join([day] + extra),
+                                     right_color="warn" if hw_s else ("link" if n_new else "ink2")))
                 body.append(vstack([k.label("What We Tested", width), k.table(rows, width)], 6))
             else:
                 body.append(vstack([k.label("What We Tested", width),
@@ -764,6 +774,16 @@ class Painter(es.Renderer):
                                  right=e["status"],
                                  right_color="good" if e["status_category"] == "done" else "ink2"))
             body.append(vstack([k.label("Test Efforts", width), self._effort_rows(rows, width)], 6))
+        found = []                                   # bugs from these sessions: new first, then seen again
+        for b in new_bugs + seen_bugs:
+            e0, s0 = next((e, s) for e, s in reversed(shown) if b in s["bugs"])
+            b_ = bug_info.get(b) or {}
+            found.append(dict(link_html=self.link(b, f"{changelog.JIRA_SITE}/browse/{b}"),
+                              tag="New" if b in new_bugs else "Seen again", text=b_.get("summary") or e0["name"],
+                              note=f"{e0['name']} · S{s0['n']}", right=b_.get("status") or "",
+                              right_color="good" if b_.get("status_category") == "done" else "ink2"))
+        if found:
+            body.append(vstack([k.label("Bugs From Testing", width), k.table(found, width)], 6))
         if hw:
             rows = []
             for x in hw:

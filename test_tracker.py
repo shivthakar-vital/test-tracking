@@ -3936,11 +3936,11 @@ class FeatureTestingPage(QWidget):
         v.addLayout(head)
         return card, v
 
-    @staticmethod
-    def _rich(text, size=12, color="#1A1A18"):
+    def _rich(self, text, size=12, color="#1A1A18"):
         lbl = QLabel(text)
         lbl.setTextFormat(Qt.RichText)
-        lbl.setOpenExternalLinks(True)
+        lbl.setOpenExternalLinks(False)
+        lbl.linkActivated.connect(self._link)
         lbl.setWordWrap(True)
         lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
         lbl.setStyleSheet(f"font-size:{size}px; color:{color};")
@@ -3962,7 +3962,7 @@ class FeatureTestingPage(QWidget):
         th = lambda t, right=False: (f'<th align="{"right" if right else "left"}" style="color:#888885; '
                                      f'font-size:10px; padding:0 0 6px 14px">{t}</th>')
         rows = [f'<tr>{th("EFFORT")}{th("STATUS")}{th("ASSIGNEE")}{th("SESSIONS", True)}'
-                f'{th("LAST SESSION", True)}{th("BUGS", True)}{th("HW REQUESTS", True)}</tr>']
+                f'{th("LAST SESSION", True)}{th("NEW BUGS", True)}{th("SEEN AGAIN", True)}{th("HW REQUESTS", True)}</tr>']
         cell = lambda x, right=False, first=False: (
             f'<td valign="middle" align="{"right" if right else "left"}" style="border-top:1px solid #ECEAE6; '
             f'padding:9px 0 9px {0 if first else 14}px">{x}</td>')
@@ -3982,16 +3982,31 @@ class FeatureTestingPage(QWidget):
             else:
                 last, color = "none logged yet", "#8A8984"
             sessions = f"{len(in_range)} of {len(e['sessions'])}" if rng and e["sessions"] else str(len(e["sessions"]))
+            settings = _settings(self.win)
+            kinds = {}
+            for x in e["sessions"]:
+                for k in x["bugs"]:
+                    kd = feature_testing.bug_kind(settings, x["ticket"], x, k)
+                    kinds[k] = "new" if "new" in (kinds.get(k), kd) else kd
+            counts = {"new": sum(v == "new" for v in kinds.values()), "seen": sum(v == "seen" for v in kinds.values())}
             rows.append("<tr>" + cell(name, first=True)
                         + cell(self._pill(e["status"], "#E3F4E1" if done else "#F1EFE8", "#0B7A0B" if done else "#52514E"))
                         + cell(html.escape(", ".join(e["assignees"]) or "—"))
                         + cell(sessions, True)
                         + cell(f'<span style="color:{color}">{html.escape(last)}</span>', True)
-                        + cell(str(len(e["bugs"])) if e["bugs"] else '<span style="color:#8A8984">—</span>', True)
+                        + cell(str(counts["new"]) if counts["new"] else '<span style="color:#8A8984">—</span>', True)
+                        + cell(str(counts["seen"]) if counts["seen"] else '<span style="color:#8A8984">—</span>', True)
                         + cell(str(len(e.get("support", []))) if e.get("support") else
                                '<span style="color:#8A8984">—</span>', True)
                         + "</tr>")
         return self._rich(f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows)}</table>', 12)
+
+    def _link(self, href):
+        if href.startswith("kind:"):                  # kind:<ticket>#<session>:<bug>:<new kind>
+            ref, _, kind = href[5:].rpartition(":")
+            self.win.set_bug_kind(ref, kind)
+        else:
+            _open_link(href)
 
     # ── drawing ───────────────────────────────────────────────────────────────
 
@@ -4043,6 +4058,13 @@ class FeatureTestingPage(QWidget):
         testers = {x for _, s in shown for x in s["testers"]}
         bugs = list(dict.fromkeys(k for _, s in shown for k in s["bugs"]))
         info = testing.get("support") or {}
+        bug_info = testing.get("bug_info") or {}
+        settings = _settings(self.win)
+        kind = lambda s, k: feature_testing.bug_kind(settings, s["ticket"], s, k)
+        new_bugs = list(dict.fromkeys(k for _, s in shown for k in s["bugs"] if kind(s, k) == "new"))
+        seen_bugs = [k for k in dict.fromkeys(k for _, s in shown for k in s["bugs"] if kind(s, k) == "seen")
+                     if k not in new_bugs]
+        admin_bugs = changelog.has_credentials()
         hw = list(dict.fromkeys(k for _, s in shown for k in s.get("support", [])))
         hw_open = [k for k in hw if (info.get(k) or {}).get("status_category") != "done"]
 
@@ -4054,7 +4076,8 @@ class FeatureTestingPage(QWidget):
                 ("Sessions", len(shown), rtext, INK),
                 ("Efforts tested", len(tested), f"{len(active)} active in JIRA", INK),
                 ("Testers", len(testers), ", ".join(sorted(testers))[:40] or "—", INK),
-                ("Bugs linked", len(bugs), "from those sessions", INK),
+                ("New bugs", len(new_bugs), f"{len(seen_bugs)} seen again" if seen_bugs else "found in testing",
+                 charts.PROGRESS if new_bugs else INK),
                 ("HW support requests", len(hw), f"{len(hw_open)} still open" if hw else "none made",
                  "#B26B00" if hw_open else INK),
                 ("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else INK)):
@@ -4083,9 +4106,18 @@ class FeatureTestingPage(QWidget):
                 f'&nbsp; {self._jira(s["ticket"], "Session " + str(s["n"]))}', 13))
             meta = " · ".join(html.escape(x) for x in (", ".join(s["testers"]), s["time"],
                                                         s["build"] and "Build " + s["build"], s["system"]) if x)
-            if s["bugs"]:
-                meta += " · Bugs: " + ", ".join(self._jira(k) for k in s["bugs"])
             bl.addWidget(self._rich(meta, 12, "#8A8984"))
+            for k in s["bugs"]:                       # each bug: new in this session, or seen again
+                b_ = bug_info.get(k) or {}
+                is_new = kind(s, k) == "new"
+                done_ = b_.get("status_category") == "done"
+                flip = (f'&nbsp; <a href="kind:{s["ticket"]}#{s["n"]}:{k}:{"seen" if is_new else "new"}" '
+                        f'style="color:#8A8984; font-size:11px">change</a>') if admin_bugs else ""
+                bl.addWidget(self._rich(
+                    (self._pill("New Bug", "#E8F1FC", "#2F5E9E") if is_new else self._pill("Bug Seen Again"))
+                    + f'&nbsp; {self._jira(k)}' + (f' {html.escape(b_["summary"])}' if b_.get("summary") else "")
+                    + (f'&nbsp; {self._pill(b_["status"], "#E3F4E1" if done_ else "#F1EFE8", "#0B7A0B" if done_ else "#52514E")}'
+                       if b_.get("status") else "") + flip, 12))
             for k in s.get("support", []):
                 t_ = info.get(k) or {}
                 done_ = t_.get("status_category") == "done"
@@ -5590,6 +5622,16 @@ class TrackerApp(QMainWindow):
                 self._set_status(f"Feature testing sync: {exc}")
 
         self._run(work, done, failed, busy_msg="Syncing feature testing from JIRA…" if force else None)
+
+    def set_bug_kind(self, ref, kind):
+        """Admin: correct whether a bug linked in a test session was new or seen again."""
+        unlocked = self._admin_unlock(self, "bug labels in feature testing")
+        if not unlocked:
+            return
+        settings = dict(unlocked[0])
+        settings[feature_testing.BUG_KIND_PREFIX + ref] = kind
+        self._save_settings(settings, f"Marked {ref.rpartition(':')[2]} as "
+                            + ("a new bug." if kind == "new" else "seen again."))
 
     def edit_testing_jql(self):
         unlocked = self._admin_unlock(self, "the feature-testing JQL")

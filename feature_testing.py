@@ -35,6 +35,11 @@ DEFAULT_JQL = ('summary ~"[QA Testing]" AND (assignee=712020:b928dc8a-87ce-4da9-
                'status!="Closed (Won\'t Do)") AND type=Testing')
 SYNC_MINUTES = 10
 SUPPORT_PROJECTS = ("V1P", "VKG")       # JIRA projects of Hardware Support Requests (VitalOne, Viking)
+BUG_KIND_PREFIX = "testing_bug:"        # admin corrections: "testing_bug:<ticket>#<session>:<bug>" → new / seen
+NEW_WORDS = re.compile(r"\b(bug\s*(ticket|tickt|tkt)?\s*(made|created|filed|logged|opened|raised)|created|made|filed|"
+                       r"logged|opened|raised|new bug|new ticket|wrote up|reported)\b", re.I)
+SEEN_WORDS = re.compile(r"\b(again|still|seen|saw this|reproduc\w*|repro|known|existing|same (issue|error|as)|"
+                        r"recurr\w*|re-?occur\w*|already|hit (it|this)|related to|tracked in|see)\b", re.I)
 CHUNK = 40000
 KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 PART_RE = re.compile(r"^\s*PT\s*(\d+)\s*[-–:]\s*", re.I)
@@ -171,6 +176,14 @@ def sessions(description):
             notes.append(ln)
         linked = list(dict.fromkeys(_keys(node)))
         keys = [k for k in linked if k.startswith(changelog.JIRA_PROJECT + "-")]
+        # the words around each bug link (its line and the line above), for New vs Seen again
+        context = {}
+        for k in keys:
+            near = []
+            for i, ln in enumerate(notes):
+                if k in ln:
+                    near += [notes[i - 1] if i else "", ln]
+            context[k] = " ".join(near)
         support = [k for k in linked if k.split("-")[0] in SUPPORT_PROJECTS]
         if not notes and (not info["build"] or re.search(r"x{3,}", info["build"], re.I) or not info["date"]):
             continue                         # an unfilled template panel, not a session
@@ -178,7 +191,7 @@ def sessions(description):
                     "date": info["date"], "time": info["time"],
                     "testers": [t.strip() for t in re.split(r",|&| and ", info["testers"]) if t.strip()],
                     "build": info["build"], "system": info["system"], "notes": notes[:60], "bugs": keys,
-                    "support": support})
+                    "support": support, "bug_context": context})
     return out
 
 
@@ -248,8 +261,8 @@ def fetch(query, progress=lambda m: None):
         t["product"] = product_of(t)
     return tickets
 
-def support_info(keys):
-    """{key: {summary, status, status_category}} for Hardware Support Requests, from JIRA."""
+def support_info(keys, created=False):
+    """{key: {summary, status, status_category[, created]}} for linked tickets, from JIRA."""
     import requests
     c = changelog.credentials()
     keys = sorted(set(keys))
@@ -260,7 +273,7 @@ def support_info(keys):
             r = requests.post(f"{changelog.JIRA_SITE}/rest/api/3/search/jql", auth=(c["jira_email"], c["jira"]),
                               headers={"Accept": "application/json", "Content-Type": "application/json"},
                               json={"jql": f"key in ({', '.join(batch)})", "maxResults": 100,
-                                    "fields": ["summary", "status"]}, timeout=30)
+                                    "fields": ["summary", "status", "created", "issuetype"]}, timeout=30)
         except requests.RequestException:
             continue
         if not r.ok:
@@ -269,13 +282,43 @@ def support_info(keys):
             st = it["fields"].get("status") or {}
             out[it["key"]] = {"summary": it["fields"].get("summary") or "", "status": st.get("name", ""),
                               "status_category": (st.get("statusCategory") or {}).get("key", "")}
+            if created:
+                out[it["key"]]["created"] = (it["fields"].get("created") or "")[:10]
+                out[it["key"]]["type"] = (it["fields"].get("issuetype") or {}).get("name", "")
     return out
+
+def guess_kind(session_date, bug, context):
+    """ "new" (found in this session) or "seen" (an existing bug hit again)."""
+    created = (bug or {}).get("created", "")
+    if created and session_date:
+        delta = (datetime.fromisoformat(session_date) - datetime.fromisoformat(created)).days
+        if delta > 1:
+            return "seen"                     # the bug existed before this session
+        if SEEN_WORDS.search(context or "") and not NEW_WORDS.search(context or ""):
+            return "seen"
+        return "new"
+    if NEW_WORDS.search(context or ""):
+        return "new"
+    return "seen"
 
 def snapshot(query, progress=lambda m: None):
     tickets = fetch(query, progress)
     keys = [k for t in tickets for s in t["sessions"] for k in s.get("support", [])]
+    bugs = [k for t in tickets for s in t["sessions"] for k in s["bugs"]]
+    bug_info = support_info(bugs, created=True) if bugs else {}
+    for t in tickets:
+        for s in t["sessions"]:
+            # only Bugs count (not documentation or task tickets linked in the notes)
+            s["bugs"] = [k for k in s["bugs"] if (bug_info.get(k) or {}).get("type", "Bug").lower() == "bug"]
+            s["bug_kinds"] = {k: guess_kind(s["date"], bug_info.get(k), s.get("bug_context", {}).get(k, ""))
+                              for k in s["bugs"]}
     return {"jql": query, "synced": datetime.now().isoformat(timespec="seconds"), "tickets": tickets,
-            "support": support_info(keys) if keys else {}}
+            "support": support_info(keys) if keys else {}, "bug_info": bug_info}
+
+def bug_kind(settings, ticket, session, key):
+    """New or seen again, with the admin's correction if there is one."""
+    fixed = (settings or {}).get(f"{BUG_KIND_PREFIX}{ticket}#{session['n']}:{key}")
+    return fixed if fixed in ("new", "seen") else session.get("bug_kinds", {}).get(key, "seen")
 
 
 # ── test efforts (clones of one ticket together) ──────────────────────────────
@@ -336,7 +379,8 @@ def to_rows(snap):
     """Rows for the hidden tab: a header, then one row per ticket as JSON (split over cells)."""
     rows = [["key", "updated", "data"], ["_meta", snap["synced"], json.dumps({"jql": snap["jql"],
                                                                                "synced": snap["synced"],
-                                                                               "support": snap.get("support", {})})]]
+                                                                               "support": snap.get("support", {}),
+                                                                               "bug_info": snap.get("bug_info", {})})]]
     for t in snap["tickets"]:
         text = json.dumps(t, separators=(",", ":"))
         rows.append([t["key"], t["updated"]] + [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)])
