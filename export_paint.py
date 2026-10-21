@@ -8,7 +8,7 @@ Each section is built as boxes that know their height for a given width, then dr
     item = build_section(...);  item.h;  item.draw(painter, x, y)
 """
 
-import html
+import html, math
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
@@ -183,20 +183,25 @@ class Kit:
 
     # charts ──────────────────────────────────────────────────────────────────
 
-    def donut(self, slices, big, small, width, d=84):
+    def donut(self, slices, big, small, width, d=156):
+        """A donut with a legend of label, count and % — beside it, or under it when the
+        column is too narrow."""
         slices = [(l or "No status", n, c) for l, n, c in slices if n > 0]      # exactly as in the sheet
         total = sum(n for _, n, _ in slices) or 1
-        lf = font(14)
-        fm = QFontMetrics(lf)
-        row = 26
+        lf, cf = font(15), font(15)
+        fm, cfm = QFontMetrics(lf), QFontMetrics(cf)
+        row = 30
+        count_w = max((cfm.horizontalAdvance(f"{n}  ·  {round(100 * n / total)}%") for _, n, _ in slices), default=40)
+        label_w = max((fm.horizontalAdvance(l) for l, _, _ in slices), default=60)
+        beside = width >= d + 28 + 22 + min(label_w, 260) + 24 + count_w
         legend_h = row * len(slices)
-        h = max(d, legend_h)
+        h = max(d, legend_h) if beside else d + 16 + legend_h
 
         def draw(p, x, y):
             p.setRenderHint(QPainter.Antialiasing)
-            cy = y + h / 2
+            cy = y + (h / 2 if beside else d / 2)
             rect = QRectF(x + 1, cy - d / 2, d, d)
-            ring = 15
+            ring = 26
             start = 90 * 16
             for _, n, color in slices:
                 span = -int(round(360 * 16 * n / total))
@@ -205,23 +210,35 @@ class Kit:
                 p.setPen(pen)
                 p.setBrush(Qt.NoBrush)
                 p.drawArc(rect.adjusted(ring / 2, ring / 2, -ring / 2, -ring / 2), start, span)
+                if len(slices) > 1:                       # a thin gap between slices
+                    p.setPen(QPen(self.c("card"), 2))
+                    ang = math.radians((start + span) / 16)
+                    c0 = rect.center()
+                    p.drawLine(QPointF(c0.x() + (d / 2 - ring) * math.cos(ang), c0.y() - (d / 2 - ring) * math.sin(ang)),
+                               QPointF(c0.x() + d / 2 * math.cos(ang), c0.y() - d / 2 * math.sin(ang)))
                 start += span
             p.setPen(self.c("ink"))
-            p.setFont(font(17, True))
-            p.drawText(QRectF(rect.x(), cy - 16, d, 20), Qt.AlignCenter, big)
+            p.setFont(font(26, True))
+            p.drawText(QRectF(rect.x(), cy - 24, d, 30), Qt.AlignCenter, big)
             p.setPen(self.c("ink2"))
-            p.setFont(font(12))
-            p.drawText(QRectF(rect.x(), cy + 2, d, 16), Qt.AlignCenter, small)
-            lx = x + d + 22
-            ly = cy - legend_h / 2
+            p.setFont(font(13))
+            p.drawText(QRectF(rect.x(), cy + 6, d, 18), Qt.AlignCenter, small)
+            if beside:
+                lx, ly, lw = x + d + 28, cy - legend_h / 2, width - d - 28
+            else:
+                lx, ly, lw = x, y + d + 16, width
             for label, n, color in slices:
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(color))
-                p.drawRoundedRect(QRectF(lx, ly + row / 2 - 6, 12, 12), 2.5, 2.5)
-                p.setPen(self.c("ink2"))
+                p.drawRoundedRect(QRectF(lx, ly + row / 2 - 7, 14, 14), 3, 3)
+                p.setPen(self.c("ink"))
                 p.setFont(lf)
-                txt = fm.elidedText(f"{label} {n}", Qt.ElideRight, int(width - (lx - x) - 20))
-                p.drawText(QRectF(lx + 20, ly, width - (lx - x) - 20, row), Qt.AlignVCenter | Qt.AlignLeft, txt)
+                p.drawText(QRectF(lx + 24, ly, lw - 24 - count_w - 12, row), Qt.AlignVCenter | Qt.AlignLeft,
+                           fm.elidedText(label, Qt.ElideRight, int(lw - 24 - count_w - 12)))
+                p.setPen(self.c("ink2"))
+                p.setFont(cf)
+                p.drawText(QRectF(lx, ly, lw, row), Qt.AlignVCenter | Qt.AlignRight,
+                           f"{n}  ·  {round(100 * n / total)}%")
                 ly += row
         return Item(h, draw)
 
@@ -258,7 +275,8 @@ class Kit:
         lf = font(15)
         fm = QFontMetrics(lf)
         lw = min(max(fm.horizontalAdvance(r[0]) for r in rows) + 16, int(width * 0.38))
-        row_h, bar_h, cw = 34, 9, 34
+        cw = max(38, QFontMetrics(font(15, True)).horizontalAdvance(str(max(r[2] for r in rows))) + 14)
+        row_h, bar_h = 40, 16
         top = max(r[2] for r in rows) or 1
         h = row_h * len(rows)
 
@@ -274,7 +292,7 @@ class Kit:
                 bx = x + lw
                 full = area * total / top
                 clip = QPainterPath()
-                clip.addRoundedRect(QRectF(bx, ry + (row_h - bar_h) / 2, max(full, 2), bar_h), bar_h / 2, bar_h / 2)
+                clip.addRoundedRect(QRectF(bx, ry + (row_h - bar_h) / 2, max(full, 2), bar_h), 4, 4)
                 p.save()
                 p.setClipPath(clip)
                 for n, color in segs:
@@ -285,7 +303,7 @@ class Kit:
                                self.c("neutral") if neutral else QColor(color))
                     bx += sw
                 p.restore()
-                p.setFont(font(15))
+                p.setFont(font(15, True))
                 p.setPen(self.c("ink"))
                 p.drawText(QRectF(x + width - cw, ry, cw, row_h), Qt.AlignVCenter | Qt.AlignRight, str(total))
         return Item(h, draw)
