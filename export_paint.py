@@ -140,7 +140,9 @@ class Kit:
             p.translate(x, y)
             doc.drawContents(p, QRectF(0, 0, width, h))
             p.restore()
-        return Item(h, draw)
+        item = Item(h, draw)
+        item.w = doc.idealWidth()
+        return item
 
     def heading(self, title, sub, width):
         f1, f2 = font(21, True), font(15)
@@ -314,7 +316,7 @@ class Kit:
 
         def draw(p, x, y):
             p.setRenderHint(QPainter.Antialiasing)
-            first_w = 66
+            first_w = max(66, max(f.w for f in firsts) + 16)
             for k, r in enumerate(rows):
                 ry = y + k * row_h
                 p.setPen(QPen(self.c("sep"), 1))
@@ -704,6 +706,62 @@ class Painter(es.Renderer):
                 k.pill(p, x + width - pill_w, top + line / 2, r["right"])
                 ry += row_h
         return Item(sum(heights), draw)
+
+    # Feature Testing ─────────────────────────────────────────────────────────
+
+    def b_testing(self, width):
+        import feature_testing as ft
+        testing = self.data.get("testing")
+        if not testing or not testing.get("tickets"):
+            return None
+        k, ctx = self.k, self.ctx
+        keep = lambda e: es.chosen(self.cfg, e["product"])
+        efforts = [e for e in ft.efforts(testing) if keep(e)]
+        shown = [(e, s) for e, s in ft.sessions_in(testing, ctx.rng) if keep(e)]
+        active = [e for e in efforts if e["status_category"] != "done"]
+        today = date.today()
+        stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
+        bugs = list(dict.fromkeys(b for _, s in shown for b in s["bugs"]))
+        body = [k.tiles([("Sessions", len(shown), ctx.range_text, "ink"),
+                         ("Bugs linked", len(bugs), "from those sessions", "ink"),
+                         ("Active efforts", len(active), f"{len(stale)} with no session in 7+ days",
+                          "warn" if stale else "ink")], width)]
+        jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
+        if self.opt("testing", "sessions"):
+            if shown:
+                rows = []
+                for e, s in shown:
+                    day = date.fromisoformat(s["date"]).strftime("%a %b %-d")
+                    first = next((ln.strip().lstrip("• ").strip() for ln in s["notes"] if ln.strip()), "")
+                    meta = " · ".join(x for x in (", ".join(s["testers"]), s["build"] and "Build " + s["build"],
+                                                  s["system"]) if x)
+                    rows.append(dict(link_html=jira(s["ticket"], f"S{s['n']}"), tag=e["product"],
+                                     text=e["name"], note=meta + (f" · {first}" if first else ""),
+                                     right=day + (f" · {es._plural(len(s['bugs']), 'bug')}" if s["bugs"] else ""),
+                                     right_color="ink2"))
+                body.append(vstack([k.label("What We Tested", width), k.table(rows, width)], 6))
+            else:
+                body.append(vstack([k.label("What We Tested", width),
+                                    k.note(f"No test sessions logged in {ctx.range_text}.", width)], 6))
+        if self.opt("testing", "efforts") and efforts:
+            rows = []
+            for e in efforts:
+                if e["last"]:
+                    ago = (today - date.fromisoformat(e["last"])).days
+                    last = "last session today" if ago == 0 else f"last session {es._plural(ago, 'day')} ago"
+                else:
+                    last = "no sessions logged yet"
+                rows.append(dict(link_html=jira(e["key"], e["key"]), tag=e["product"], text=e["name"],
+                                 note=f"{es._plural(len(e['sessions']), 'session')} · {last}" if e["sessions"] else last,
+                                 right=e["status"],
+                                 right_color="good" if e["status_category"] == "done" else "ink2"))
+            body.append(vstack([k.label("Test Efforts", width), self._effort_rows(rows, width)], 6))
+        return "Feature Testing", "from JIRA Testing tickets", vstack(body, 20)
+
+    def _effort_rows(self, rows, width):
+        # like table(), but the key column is wider (PROD-1234)
+        item = self.k.table(rows, width)
+        return item
 
     # Change Log ──────────────────────────────────────────────────────────────
 

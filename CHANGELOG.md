@@ -1,5 +1,13 @@
 # What's new
 
+## 2.3.1 (testing)
+- **🧪 Feature Testing**, from JIRA's Testing tickets (your JQL; the admin can change it with **JQL…**). The app reads every **session panel** testers log in a ticket — date, testers, build, test system, notes, and the PROD bugs linked — and treats clones of one ticket (PT2, PT3…) as one test effort.
+  - **🧪 Feature Testing tab**: Active efforts, Sessions, Testers, Bugs linked, and efforts with **no session in 7+ days**; **What We Tested** (each session in the dashboard's dates, with its notes and bugs); **Test Efforts** (status, assignee, sessions, last session, bugs). Filter by product and search.
+  - **Export section**: Feature Testing — tiles, What We Tested, Test Efforts.
+  - **SQL**: `testing` and `test_sessions` tables.
+  - Synced from JIRA by the admin's app every 10 minutes (and with **↻ Sync from JIRA**) into a hidden tab of the sheet, so everyone sees it without a token.
+
+
 ## 2.3.0 (testing)
 - **A simpler, cleaner export: Sections.** Pick **End-to-End Runs**, **Error Analysis**, **New Bugs**, and **Change Log**, put them in any order, and choose a few options for each:
   - **End-to-End Runs**: Run Status (donut + Runs and Unresolved), Runs Per Software Version, Failed Runs (reason · subsystem · note, and how long it's been open); optional Pass Rate By Day and Coder vs Atlantis.

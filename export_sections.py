@@ -34,11 +34,13 @@ SECTIONS = {
     "errors":    ("Error Analysis", [("reason", "Reason", True), ("subsystem", "Subsystem", True),
                                      ("notes", "Unresolved With Notes", False)]),
     "bugs":      ("New Bugs", [("closed", "Show Closed Bugs", False), ("allstatus", "All-Bugs Status", False)]),
+    "testing":   ("Feature Testing", [("sessions", "What We Tested", True), ("efforts", "Test Efforts", True)]),
     "changelog": ("Change Log", []),
 }
 
 def default_config():
-    return {"order": list(SECTIONS), "on": {"e2e": True, "errors": True, "bugs": True, "changelog": False},
+    return {"order": list(SECTIONS), "on": {"e2e": True, "errors": True, "bugs": True, "testing": True,
+                                            "changelog": False},
             "opts": {sid: {k: d for k, _, d in opts} for sid, (_, opts) in SECTIONS.items()},
             "products": {}, "split": True}
 

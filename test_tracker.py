@@ -41,6 +41,7 @@ import chartquery
 import charts
 import export_report
 import export_sections
+import feature_testing
 import layout
 import sqldata
 import tracker_store as store
@@ -48,7 +49,7 @@ import ui_theme
 import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "2.3.0"         # bump this for each release, then push a matching tag (v2.3.0)
+APP_VERSION = "2.3.1"         # bump this for each release, then push a matching tag (v2.3.1)
 APP_CHANNEL = "testing"       # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
@@ -3867,6 +3868,168 @@ from <code>git log {esc(log["base"][:7])}..{esc(log["head"][:7])}</code> and JIR
     return "".join(out)
 
 
+class FeatureTestingPage(QWidget):
+    """Feature testing from JIRA's Testing tickets: what was tested in the dates on the
+    dashboard (each session's notes, build and bugs), and every test effort's state."""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 10, 0, 0)
+        root.setSpacing(10)
+        top = QHBoxLayout()
+        self.info = _small_label("", MUTED)
+        top.addWidget(self.info, 1)
+        self.product = QComboBox()
+        for label in ("All products", "VitalOne", "Viking"):
+            self.product.addItem(label, None if label.startswith("All") else label)
+        self.product.currentIndexChanged.connect(self.refresh)
+        top.addWidget(self.product)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search effort, tester, build, notes, PROD key…")
+        self.search.setMinimumWidth(320)
+        self.search.textChanged.connect(self.refresh)
+        top.addWidget(self.search)
+        self.sync_btn = QPushButton("↻ Sync from JIRA")
+        self.sync_btn.clicked.connect(lambda: self.win.sync_testing(force=True))
+        self.jql_btn = QPushButton("JQL…")
+        self.jql_btn.setObjectName("link")
+        self.jql_btn.clicked.connect(self.win.edit_testing_jql)
+        top.addWidget(self.sync_btn)
+        top.addWidget(self.jql_btn)
+        root.addLayout(top)
+        self.body = QTextBrowser()
+        self.body.setOpenExternalLinks(True)
+        self.body.setStyleSheet("QTextBrowser { background:#FFFFFF; border:1px solid #E6E4E0; border-radius:10px; }")
+        root.addWidget(self.body, 1)
+
+    def refresh(self, *_):
+        data = self.win.data or {}
+        testing = data.get("testing")
+        admin = changelog.has_credentials()
+        self.sync_btn.setVisible(admin)
+        self.jql_btn.setVisible(admin)
+        if not testing or not testing.get("tickets"):
+            hint = ("Click <b>↻ Sync from JIRA</b> to read the Testing tickets." if admin else
+                    "Nothing synced from JIRA yet. The admin's app syncs the Testing tickets here for everyone.")
+            self.info.setText("")
+            self.body.setHtml(f'<p style="color:{MUTED}; font-size:14px; padding:20px">{hint}</p>')
+            return
+        try:
+            when = datetime.fromisoformat(testing["synced"]).strftime("%b %-d, %H:%M")
+        except (KeyError, ValueError):
+            when = "?"
+        n = len(testing["tickets"])
+        self.info.setText(f"{n} Testing ticket{'s' if n != 1 else ''} from JIRA · synced {when}"
+                          + (" · syncs every few minutes while this app is open" if admin else ""))
+        d = self.win.dashboard
+        self.body.setHtml(feature_testing_html(testing, d.range, d.range_text, self.product.currentData(),
+                                               self.search.text()))
+
+
+def _linkify(text):
+    """Notes text → HTML with short links: JIRA URLs become their key, Atlantis runs "Atlantis run"."""
+    esc = html.escape
+
+    def link(m):
+        url = m.group(0).rstrip(").,")
+        key = re.search(r"/browse/([A-Z][A-Z0-9]+-\d+)", url)
+        label = key.group(1) if key else ("Atlantis run" if "atlantis" in url and "/run/" in url else
+                                          (url.split("/")[2] if "//" in url else url))
+        return f'<a href="{esc(url, quote=True)}">{esc(label)}</a>'
+    parts, last = [], 0
+    for m in re.finditer(r"https?://\S+", text):
+        parts.append(esc(text[last:m.start()]))
+        parts.append(link(m))
+        last = m.end()
+    parts.append(esc(text[last:]))
+    return "".join(parts)
+
+
+def feature_testing_html(testing, rng, range_text, product=None, search=""):
+    esc = html.escape
+    q = search.strip().lower()
+    today = date.today()
+
+    def hay(e, s=None):
+        bits = [e["name"], e["status"], " ".join(e["assignees"]), " ".join(t["key"] for t in e["tickets"])]
+        if s:
+            bits += [s["build"], s["system"], " ".join(s["testers"]), " ".join(s["notes"]), " ".join(s["bugs"])]
+        return " ".join(bits).lower()
+
+    efforts = [e for e in feature_testing.efforts(testing) if not product or e["product"] == product]
+    shown = [(e, s) for e, s in feature_testing.sessions_in(testing, rng)
+             if (not product or e["product"] == product) and (not q or q in hay(e, s))]
+    active = [e for e in efforts if e["status_category"] != "done"]
+    stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
+    testers = {x for _, s in shown for x in s["testers"]}
+    bugs = list(dict.fromkeys(k for _, s in shown for k in s["bugs"]))
+
+    def tile(label, value, sub="", color="#1A1A18"):
+        return (f'<td bgcolor="#F7F7F5" style="padding:10px 16px"><span style="font-size:12px; color:#52514E">'
+                f'{esc(label)}</span><br><span style="font-size:24px; font-weight:bold; color:{color}">{value}</span>'
+                f'<br><span style="font-size:11px; color:#8A8984">{esc(sub)}</span></td><td width="10"></td>')
+
+    def jira(key, label=None):
+        return f'<a href="{changelog.JIRA_SITE}/browse/{esc(key)}">{esc(label or key)}</a>'
+
+    def pill(text, bg="#F1EFE8", fg="#52514E"):
+        return f'<span style="background:{bg}; color:{fg}; font-size:11px">&nbsp;{esc(text)}&nbsp;</span>'
+
+    out = [f'''<p style="font-size:22px; font-weight:bold; margin:6px 0 10px 0">Feature Testing</p>
+<table cellspacing="0" cellpadding="0" style="margin-bottom:14px"><tr>
+{tile("Active test efforts", len(active), f"{len(efforts)} in JIRA")}
+{tile("Sessions", len(shown), range_text)}
+{tile("Testers", len(testers), range_text)}
+{tile("Bugs linked", len(bugs), range_text)}
+{tile("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else "#1A1A18")}
+</tr></table>''']
+
+    out.append(f'<p style="font-size:16px; font-weight:bold; margin:14px 0 6px 0">What We Tested '
+               f'<span style="color:#8A8984; font-weight:normal; font-size:13px">{esc(range_text)}</span></p>')
+    if not shown:
+        out.append(f'<p style="color:#8A8984">No test sessions logged in {esc(range_text)}.</p>')
+    for e, s in shown:
+        day = date.fromisoformat(s["date"]).strftime("%a %b %-d")
+        meta = " · ".join(x for x in (", ".join(s["testers"]), s["time"], s["build"] and "Build " + s["build"],
+                                       s["system"]) if x)
+        notes = "".join(f'<div style="margin-left:{12 * (len(ln) - len(ln.lstrip()))}px">{_linkify(ln.strip())}</div>'
+                        for ln in s["notes"][:14])
+        more = f'<div style="color:#8A8984">… {len(s["notes"]) - 14} more lines in JIRA</div>' if len(s["notes"]) > 14 else ""
+        bug_html = (" &nbsp; Bugs: " + ", ".join(jira(k) for k in s["bugs"])) if s["bugs"] else ""
+        out.append(f'''<table width="100%" cellspacing="0" cellpadding="10" style="margin-bottom:8px"><tr>
+<td style="border:1px solid #E6E4E0"><b style="font-size:14px">{esc(e["name"])}</b> &nbsp;{pill(e["product"])}
+&nbsp; <span style="color:#52514E">{jira(s["ticket"], f"Session {s['n']}")} · {esc(day)}</span><br>
+<span style="color:#8A8984; font-size:12px">{esc(meta)}{bug_html}</span>
+<div style="margin-top:6px; font-size:12px; color:#1A1A18">{notes}{more}</div></td></tr></table>''')
+
+    out.append('<p style="font-size:16px; font-weight:bold; margin:18px 0 6px 0">Test Efforts</p>')
+    rows = []
+    for e in efforts:
+        if q and q not in hay(e):
+            continue
+        if e["last"]:
+            ago = (today - date.fromisoformat(e["last"])).days
+            last = "today" if ago == 0 else f"{ago} day{'s' if ago != 1 else ''} ago"
+            last_color = "#B26B00" if ago > 7 and e["status_category"] != "done" else "#52514E"
+        else:
+            last, last_color = "no sessions logged yet", "#8A8984"
+        chain = " → ".join(jira(t["key"], (f"PT{t['part']} " if len(e["tickets"]) > 1 else "") + t["key"])
+                           for t in e["tickets"])
+        done = e["status_category"] == "done"
+        rows.append(f'''<tr><td style="padding:8px 10px 8px 0; border-top:1px solid #ECEAE6"><b>{esc(e["name"])}</b>
+&nbsp;{pill(e["product"])}<br><span style="font-size:12px">{chain}</span></td>
+<td style="padding:8px 10px; border-top:1px solid #ECEAE6">{pill(e["status"], "#E3F4E1" if done else "#F1EFE8", "#0B7A0B" if done else "#52514E")}</td>
+<td style="padding:8px 10px; border-top:1px solid #ECEAE6; color:#52514E">{esc(", ".join(e["assignees"]))}</td>
+<td style="padding:8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["sessions"])} session{"s" if len(e["sessions"]) != 1 else ""}<br>
+<span style="font-size:12px; color:{last_color}">last {esc(last)}</span></td>
+<td style="padding:8px 0 8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["bugs"])} bug{"s" if len(e["bugs"]) != 1 else ""}</td></tr>''')
+    out.append(f'<table width="100%" cellspacing="0">{"".join(rows)}</table>' if rows else
+               '<p style="color:#8A8984">Nothing matches.</p>')
+    return "".join(out)
+
+
 class Dashboard(QScrollArea):
     def __init__(self, win):
         super().__init__()
@@ -4369,6 +4532,8 @@ class TrackerApp(QMainWindow):
         self.tabs.addTab(dash_page, "📊 Dashboard")
         self.changelog_page = ChangeLogPage(self)
         self.tabs.addTab(self.changelog_page, "📝 Change Log")
+        self.testing_page = FeatureTestingPage(self)
+        self.tabs.addTab(self.testing_page, "🧪 Feature Testing")
         self.empty = QLabel("Add your test-tracking Google Sheet in ⚙ Settings to get started.")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setStyleSheet(f"color:{MUTED}; font-size:14px;")
@@ -4605,6 +4770,8 @@ class TrackerApp(QMainWindow):
         charts.register(data)
         self.view_bar.refresh()                   # shared views may have changed in the sheet
         self.changelog_page.refresh()
+        self.testing_page.refresh()
+        QTimer.singleShot(1500, self.sync_testing)      # keep the JIRA testing data fresh (admin's app)
         self.setWindowTitle(f"{APP_TITLE} — {data['title']}")
         titles = [t["title"] for t in data["tabs"]]
         for title in list(self.pages):
@@ -4617,12 +4784,12 @@ class TrackerApp(QMainWindow):
             if page is None:
                 page = TabPage(self, tab)
                 self.pages[tab["title"]] = page
-                self.tabs.insertTab(i + 2, page, tab["title"])     # after Dashboard and Change Log
+                self.tabs.insertTab(i + 3, page, tab["title"])     # after Dashboard, Change Log, Feature Testing
             else:
                 page.set_tab(tab)
-                if self.tabs.indexOf(page) != i + 2:
+                if self.tabs.indexOf(page) != i + 3:
                     self.tabs.removeTab(self.tabs.indexOf(page))
-                    self.tabs.insertTab(i + 2, page, tab["title"])
+                    self.tabs.insertTab(i + 3, page, tab["title"])
             if store.readonly_tab(tab):
                 self.tabs.setTabToolTip(i + 1, "Filled in automatically; read-only here")
         self.date_bar.refresh()
@@ -5258,6 +5425,72 @@ class TrackerApp(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if reply == QMessageBox.Yes:
             self._run_installer(r["zip"])
+
+    # ── feature testing from JIRA ─────────────────────────────────────────────
+
+    def sync_testing(self, force=False):
+        """Read the Testing tickets from JIRA and save them to the sheet's hidden tab, so
+        everyone sees them. Only the app with the JIRA token does this, at most every few
+        minutes (or now, with force)."""
+        import time
+        if not (self.data and self.source and self.can_edit and changelog.has_credentials()):
+            if force:
+                QMessageBox.information(self, "Can't sync", "Connect to the sheet, and add your JIRA token "
+                                        "(Change Log → Tokens…), then try again.")
+            return
+        if getattr(self, "_testing_busy", False):
+            return
+        if not force and time.time() - getattr(self, "_testing_at", 0) < feature_testing.SYNC_MINUTES * 60:
+            return
+        self._testing_busy, self._testing_at = True, time.time()
+        query, src = feature_testing.jql(_settings(self)), self.source
+
+        def work():
+            snap = feature_testing.snapshot(query)
+            src.save_testing(feature_testing.to_rows(snap))
+            return snap
+
+        def done(snap):
+            self._testing_busy = False
+            self.data["testing"] = snap
+            store.save_cache(self.url, self.data)
+            self.testing_page.refresh()
+            if force:
+                self._set_status(f"Synced {len(snap['tickets'])} Testing tickets from JIRA.")
+
+        def failed(exc):
+            self._testing_busy = False
+            if force:
+                QMessageBox.warning(self, "Couldn't sync from JIRA", str(exc))
+            else:
+                self._set_status(f"Feature testing sync: {exc}")
+
+        self._run(work, done, failed, busy_msg="Syncing feature testing from JIRA…" if force else None)
+
+    def edit_testing_jql(self):
+        unlocked = self._admin_unlock(self, "the feature-testing JQL")
+        if not unlocked:
+            return
+        settings = unlocked[0]
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Feature testing JQL")
+        dlg.setMinimumWidth(640)
+        edit = QPlainTextEdit(feature_testing.jql(settings))
+        edit.setMinimumHeight(140)
+        lay_ = QVBoxLayout(dlg)
+        lay_.addWidget(_small_label("Which JIRA tickets count as feature testing. Saved in the sheet; your app "
+                                    "syncs them for everyone.", MUTED))
+        lay_.addWidget(edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay_.addWidget(buttons)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        settings = dict(settings)
+        settings[feature_testing.JQL_KEY] = " ".join(edit.toPlainText().split())
+        self._save_settings(settings, "Feature-testing JQL saved.")
+        QTimer.singleShot(500, lambda: self.sync_testing(force=True))
 
     def _restart(self):
         """Quit and open the app again (e.g. to switch light / dark)."""

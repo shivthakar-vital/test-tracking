@@ -108,6 +108,7 @@ def tab_url(url, tab):
 # and a copied release sheet keeps them.
 
 SETTINGS_TAB = "Test Tracker Settings"
+TESTING_TAB = "Test Tracker Feature Testing"      # synced from JIRA by the admin's app (feature_testing.py)
 PASSCODE_KEY = "admin_passcode"
 COLOR_PREFIX = "color:"
 
@@ -628,10 +629,12 @@ class SheetSource:
                       "tables(tableId,range,columnProperties))"})
         settings_sheet = next((s for s in meta["sheets"]
                                if s["properties"]["title"] == SETTINGS_TAB), None)
+        testing_sheet = next((s for s in meta["sheets"]
+                              if s["properties"]["title"] == TESTING_TAB), None)
         visible = [s for s in meta["sheets"]
-                   if not s["properties"].get("hidden") and s is not settings_sheet]
+                   if not s["properties"].get("hidden") and s not in (settings_sheet, testing_sheet)]
         grids = {}
-        wanted = visible + ([settings_sheet] if settings_sheet else [])
+        wanted = visible + [x for x in (settings_sheet, testing_sheet) if x]
         if wanted:
             got = self.book.fetch_sheet_metadata({
                 "includeGridData": "true",
@@ -648,7 +651,13 @@ class SheetSource:
                 vals = [v.get("formattedValue", "").strip() for v in row.get("values", [])]
                 if len(vals) >= 2 and vals[0]:
                     settings[vals[0]] = vals[1]
-        return {"title": meta["properties"]["title"], "url": self.url,
+        testing = None
+        if testing_sheet:
+            import feature_testing
+            rows = [[v.get("formattedValue", "") for v in row.get("values", [])]
+                    for row in grids.get(testing_sheet["properties"]["sheetId"], [])]
+            testing = feature_testing.from_rows(rows)
+        return {"title": meta["properties"]["title"], "url": self.url, "testing": testing,
                 "tabs": [t for t in tabs if t["columns"]], "settings": settings,
                 "fetched_at": datetime.now().isoformat(timespec="seconds")}
 
@@ -737,6 +746,21 @@ class SheetSource:
             value_render_option=ValueRenderOption.formatted)
 
     # ── writing ───────────────────────────────────────────────────────────────
+
+    def save_testing(self, rows):
+        """Write the feature-testing sync to its hidden tab (made on first use)."""
+        import gspread
+        try:
+            ws = self.book.worksheet(TESTING_TAB)
+        except gspread.WorksheetNotFound:
+            ws = self.book.add_worksheet(TESTING_TAB, rows=max(len(rows) + 10, 50), cols=8)
+            self.book.batch_update({"requests": [{"updateSheetProperties": {
+                "properties": {"sheetId": ws.id, "hidden": True}, "fields": "hidden"}}]})
+        width = max(len(r) for r in rows)
+        if ws.col_count < width or ws.row_count < len(rows):
+            ws.resize(rows=max(ws.row_count, len(rows) + 10), cols=max(ws.col_count, width))
+        ws.clear()
+        ws.update([r + [""] * (width - len(r)) for r in rows], "A1", value_input_option="RAW")
 
     def save_settings(self, settings):
         """Write the shared settings to the hidden settings tab (made on first use)."""

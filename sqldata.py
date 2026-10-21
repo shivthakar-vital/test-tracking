@@ -20,6 +20,10 @@ Rebuilt for each date range the dashboard or export shows (it takes a few ms). I
                      subsystem, component, carried_over, notes (from its first run)
         bugs         the bug tab: key, key_link, summary, status, status_class, assignee,
                      created, done, product (VitalOne / Viking), is_open, in_qa
+        testing      JIRA Testing tickets (feature testing): key, effort, part, status, assignee,
+                     sessions, last_session, bugs
+        test_sessions  one row per logged test session: key, effort, product, session, date,
+                     testers, build, system, notes, bugs
 
   • parameters for the dates on screen: :start and :end (YYYY-MM-DD; all dates when none
     is picked) — e.g.  WHERE run_date BETWEEN :start AND :end
@@ -200,6 +204,27 @@ class Database:
                              int(not finished and "qa" in store._words(st))])
         self._create("bugs", BUG, rows)
         self.views["bugs"] = BUG
+
+        import feature_testing                                           # 6. feature testing (JIRA)
+        testing = self.data.get("testing") or {}
+        T = ["key", "url", "effort", "part", "summary", "product", "status", "status_category", "assignee",
+             "created", "updated", "sessions", "last_session", "bugs"]
+        S = ["key", "url", "effort", "product", "session", "date", "time", "testers", "build", "system",
+             "notes", "bugs"]
+        trows, srows = [], []
+        for t in testing.get("tickets", []):
+            ss = t.get("sessions", [])
+            trows.append([t["key"], t["url"], t["effort"], t["part"], t["summary"], t.get("product"), t["status"],
+                          t["status_category"], t["assignee"], t["created"], t["updated"], len(ss),
+                          max((x["date"] for x in ss if x["date"]), default=None),
+                          ", ".join(dict.fromkeys(b for x in ss for b in x["bugs"]))])
+            for x in ss:
+                srows.append([t["key"], t["url"], t["effort"], t.get("product"), x["n"], x["date"] or None, x["time"],
+                              ", ".join(x["testers"]), x["build"], x["system"], "\n".join(x["notes"]),
+                              ", ".join(x["bugs"])])
+        self._create("testing", T, trows)
+        self._create("test_sessions", S, srows)
+        self.views["testing"], self.views["test_sessions"] = T, S
         self.conn.commit()
 
     # ── querying ──────────────────────────────────────────────────────────────
