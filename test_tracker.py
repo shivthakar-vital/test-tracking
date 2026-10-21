@@ -3983,12 +3983,14 @@ class FeatureTestingPage(QWidget):
                 last, color = "none logged yet", "#8A8984"
             sessions = f"{len(in_range)} of {len(e['sessions'])}" if rng and e["sessions"] else str(len(e["sessions"]))
             settings = _settings(self.win)
+            counted = in_range if rng else e["sessions"]      # only the sessions in the chosen dates
             kinds = {}
-            for x in e["sessions"]:
+            for x in counted:
                 for k in x["bugs"]:
                     kd = feature_testing.bug_kind(settings, x["ticket"], x, k)
                     kinds[k] = "new" if "new" in (kinds.get(k), kd) else kd
             counts = {"new": sum(v == "new" for v in kinds.values()), "seen": sum(v == "seen" for v in kinds.values())}
+            hw_keys = list(dict.fromkeys(k for x in counted for k in x.get("support", [])))
             rows.append("<tr>" + cell(name, first=True)
                         + cell(self._pill(e["status"], "#E3F4E1" if done else "#F1EFE8", "#0B7A0B" if done else "#52514E"))
                         + cell(html.escape(", ".join(e["assignees"]) or "—"))
@@ -3996,8 +3998,7 @@ class FeatureTestingPage(QWidget):
                         + cell(f'<span style="color:{color}">{html.escape(last)}</span>', True)
                         + cell(str(counts["new"]) if counts["new"] else '<span style="color:#8A8984">—</span>', True)
                         + cell(str(counts["seen"]) if counts["seen"] else '<span style="color:#8A8984">—</span>', True)
-                        + cell(str(len(e.get("support", []))) if e.get("support") else
-                               '<span style="color:#8A8984">—</span>', True)
+                        + cell(str(len(hw_keys)) if hw_keys else '<span style="color:#8A8984">—</span>', True)
                         + "</tr>")
         return self._rich(f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows)}</table>', 12)
 
