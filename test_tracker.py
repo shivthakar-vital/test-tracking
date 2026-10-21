@@ -49,7 +49,7 @@ import ui_theme
 import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "2.3.1"         # bump this for each release, then push a matching tag (v2.3.1)
+APP_VERSION = "2.3.2"         # bump this for each release, then push a matching tag (v2.3.2)
 APP_CHANNEL = "stable"        # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
@@ -3146,6 +3146,8 @@ class DateBar(QFrame):
         self._apply(save=True)
         if self.win.data:
             self.win.dashboard.set_data(self.win.data)
+            if hasattr(self.win, "testing_page"):
+                self.win.testing_page.refresh()
 
     def current_range(self):
         """(first day, last day), or None for all dates."""
@@ -3163,7 +3165,10 @@ class DateBar(QFrame):
         tabs = (self.win.data or {}).get("tabs", [])
         dated = [t["title"] for t in tabs if store.date_column(t)]
         bugs = [t["title"] for t in tabs if store.is_bug_tab(t)]
-        if rng is None:
+        testing = getattr(self.win, "testing_page", None)
+        if rng is not None and testing is not None and self.parent() is testing:
+            self.note.setText(f"Showing test sessions dated {dash.range_text}. The dashboard uses the same dates.")
+        elif rng is None:
             self.note.setText("")
         else:
             parts = [", ".join(dated)] if dated else []
@@ -3869,18 +3874,23 @@ from <code>git log {esc(log["base"][:7])}..{esc(log["head"][:7])}</code> and JIR
 
 
 class FeatureTestingPage(QWidget):
-    """Feature testing from JIRA's Testing tickets: what was tested in the dates on the
-    dashboard (each session's notes, build and bugs), and every test effort's state."""
+    """Feature testing from JIRA's Testing tickets, in sections like the dashboard:
+    Overview, What We Tested (by day), Tested in These Dates, Not Tested in These Dates.
+    Uses the dashboard's date filter (the Dates bar moves here when this tab is open)."""
 
     def __init__(self, win):
         super().__init__()
         self.win = win
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 10, 0, 0)
-        root.setSpacing(10)
+        root.setSpacing(4)
         top = QHBoxLayout()
+        title = QLabel("Feature Testing")
+        title.setStyleSheet("font-size:20px; font-weight:bold;")
+        top.addWidget(title)
+        top.addSpacing(10)
         self.info = _small_label("", MUTED)
-        top.addWidget(self.info, 1)
+        top.addWidget(self.info, 1, Qt.AlignBottom)
         self.product = QComboBox()
         for label in ("All products", "VitalOne", "Viking"):
             self.product.addItem(label, None if label.startswith("All") else label)
@@ -3888,7 +3898,7 @@ class FeatureTestingPage(QWidget):
         top.addWidget(self.product)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search effort, tester, build, notes, PROD key…")
-        self.search.setMinimumWidth(320)
+        self.search.setMinimumWidth(300)
         self.search.textChanged.connect(self.refresh)
         top.addWidget(self.search)
         self.sync_btn = QPushButton("↻ Sync from JIRA")
@@ -3899,10 +3909,89 @@ class FeatureTestingPage(QWidget):
         top.addWidget(self.sync_btn)
         top.addWidget(self.jql_btn)
         root.addLayout(top)
-        self.body = QTextBrowser()
-        self.body.setOpenExternalLinks(True)
-        self.body.setStyleSheet("QTextBrowser { background:#FFFFFF; border:1px solid #E6E4E0; border-radius:10px; }")
-        root.addWidget(self.body, 1)
+        self.date_slot = QVBoxLayout()               # the dashboard's Dates bar sits here on this tab
+        self.date_slot.setContentsMargins(0, 0, 0, 0)
+        root.addLayout(self.date_slot)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        root.addWidget(self.scroll, 1)
+
+    # ── pieces ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _card(title, sub=""):
+        card = QFrame()
+        card.setObjectName("card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 14, 18, 16)
+        v.setSpacing(10)
+        head = QHBoxLayout()
+        t = QLabel(title)
+        t.setStyleSheet("font-size:15px; font-weight:bold;")
+        head.addWidget(t)
+        if sub:
+            head.addWidget(_small_label(sub, MUTED), 0, Qt.AlignBottom)
+        head.addStretch(1)
+        v.addLayout(head)
+        return card, v
+
+    @staticmethod
+    def _rich(text, size=12, color="#1A1A18"):
+        lbl = QLabel(text)
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setOpenExternalLinks(True)
+        lbl.setWordWrap(True)
+        lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lbl.setStyleSheet(f"font-size:{size}px; color:{color};")
+        return lbl
+
+    @staticmethod
+    def _pill(text, bg="#F1EFE8", fg="#52514E"):
+        return (f'<span style="background-color:{bg}; color:{fg}; font-size:11px">&nbsp;'
+                f'{html.escape(text)}&nbsp;</span>')
+
+    @staticmethod
+    def _jira(key, label=None):
+        return (f'<a href="{changelog.JIRA_SITE}/browse/{html.escape(key)}" style="color:#2F5E9E; '
+                f'text-decoration:none">{html.escape(label or key)}</a>')
+
+    def _effort_table(self, efforts, rng, today):
+        """One table: effort (with its tickets), status, assignee, sessions, last session, bugs."""
+        lo, hi = (rng[0].isoformat(), rng[1].isoformat()) if rng else ("", "9999")
+        th = lambda t, right=False: (f'<th align="{"right" if right else "left"}" style="color:#888885; '
+                                     f'font-size:10px; padding:0 0 6px 14px">{t}</th>')
+        rows = [f'<tr>{th("EFFORT")}{th("STATUS")}{th("ASSIGNEE")}{th("SESSIONS", True)}'
+                f'{th("LAST SESSION", True)}{th("BUGS", True)}</tr>']
+        cell = lambda x, right=False, first=False: (
+            f'<td valign="middle" align="{"right" if right else "left"}" style="border-top:1px solid #ECEAE6; '
+            f'padding:9px 0 9px {0 if first else 14}px">{x}</td>')
+        for e in efforts:
+            in_range = [x for x in e["sessions"] if x["date"] and lo <= x["date"] <= hi]
+            chain = " → ".join(self._jira(t["key"], (f"PT{t['part']} " if len(e["tickets"]) > 1 else "") + t["key"])
+                               for t in e["tickets"])
+            new = bool(rng) and bool(e["tickets"][0]["created"]) and lo <= e["tickets"][0]["created"] <= hi
+            name = (f'<b>{html.escape(e["name"])}</b>&nbsp; {self._pill(e["product"])}'
+                    + (f'&nbsp; {self._pill("New", "#E8F1FC", "#2F5E9E")}' if new else "")
+                    + f'<br><span style="font-size:11px">{chain}</span>')
+            done = e["status_category"] == "done"
+            if e["last"]:
+                ago = (today - date.fromisoformat(e["last"])).days
+                last = "today" if ago == 0 else f"{ago} day{'s' if ago != 1 else ''} ago"
+                color = "#B26B00" if ago > 7 and not done else "#52514E"
+            else:
+                last, color = "none logged yet", "#8A8984"
+            sessions = f"{len(in_range)} of {len(e['sessions'])}" if rng and e["sessions"] else str(len(e["sessions"]))
+            rows.append("<tr>" + cell(name, first=True)
+                        + cell(self._pill(e["status"], "#E3F4E1" if done else "#F1EFE8", "#0B7A0B" if done else "#52514E"))
+                        + cell(html.escape(", ".join(e["assignees"]) or "—"))
+                        + cell(sessions, True)
+                        + cell(f'<span style="color:{color}">{html.escape(last)}</span>', True)
+                        + cell(str(len(e["bugs"])) if e["bugs"] else '<span style="color:#8A8984">—</span>', True)
+                        + "</tr>")
+        return self._rich(f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows)}</table>', 12)
+
+    # ── drawing ───────────────────────────────────────────────────────────────
 
     def refresh(self, *_):
         data = self.win.data or {}
@@ -3910,22 +3999,114 @@ class FeatureTestingPage(QWidget):
         admin = changelog.has_credentials()
         self.sync_btn.setVisible(admin)
         self.jql_btn.setVisible(admin)
+        body = QWidget()
+        body.setObjectName("dash")
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 10, 8, 20)
+        root.setSpacing(14)
         if not testing or not testing.get("tickets"):
-            hint = ("Click <b>↻ Sync from JIRA</b> to read the Testing tickets." if admin else
-                    "Nothing synced from JIRA yet. The admin's app syncs the Testing tickets here for everyone.")
             self.info.setText("")
-            self.body.setHtml(f'<p style="color:{MUTED}; font-size:14px; padding:20px">{hint}</p>')
+            root.addWidget(_small_label("Click ↻ Sync from JIRA to read the Testing tickets." if admin else
+                                        "Nothing synced from JIRA yet. The admin's app syncs the Testing "
+                                        "tickets here for everyone.", MUTED))
+            root.addStretch(1)
+            self.scroll.setWidget(body)
             return
         try:
             when = datetime.fromisoformat(testing["synced"]).strftime("%b %-d, %H:%M")
         except (KeyError, ValueError):
             when = "?"
         n = len(testing["tickets"])
-        self.info.setText(f"{n} Testing ticket{'s' if n != 1 else ''} from JIRA · synced {when}"
-                          + (" · syncs every few minutes while this app is open" if admin else ""))
+        self.info.setText(f"{n} Testing ticket{'s' if n != 1 else ''} from JIRA · synced {when}")
         d = self.win.dashboard
-        self.body.setHtml(feature_testing_html(testing, d.range, d.range_text, self.product.currentData(),
-                                               self.search.text()))
+        rng, rtext = d.range, d.range_text
+        product, q = self.product.currentData(), self.search.text().strip().lower()
+        today = date.today()
+
+        def hay(e, s=None):
+            bits = [e["name"], e["status"], " ".join(e["assignees"]), " ".join(t["key"] for t in e["tickets"])]
+            if s:
+                bits += [s["build"], s["system"], " ".join(s["testers"]), " ".join(s["notes"]), " ".join(s["bugs"])]
+            return " ".join(bits).lower()
+
+        efforts = [e for e in feature_testing.efforts(testing) if (not product or e["product"] == product)]
+        shown = [(e, s) for e, s in feature_testing.sessions_in(testing, rng)
+                 if (not product or e["product"] == product) and (not q or q in hay(e, s))]
+        tested_keys = {e["key"] for e in feature_testing.efforts_in(testing, rng)}
+        tested = [e for e in efforts if e["key"] in tested_keys and (not q or q in hay(e))]
+        untested = [e for e in efforts if e["key"] not in tested_keys and e["status_category"] != "done"
+                    and (not q or q in hay(e))]
+        active = [e for e in efforts if e["status_category"] != "done"]
+        stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
+        testers = {x for _, s in shown for x in s["testers"]}
+        bugs = list(dict.fromkeys(k for _, s in shown for k in s["bugs"]))
+
+        # Overview
+        card, v = self._card("Overview", rtext)
+        tiles = QHBoxLayout()
+        tiles.setSpacing(10)
+        for label, value, sub, color in (
+                ("Sessions", len(shown), rtext, INK),
+                ("Efforts tested", len(tested), f"{len(active)} active in JIRA", INK),
+                ("Testers", len(testers), ", ".join(sorted(testers))[:40] or "—", INK),
+                ("Bugs linked", len(bugs), "from those sessions", INK),
+                ("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else INK)):
+            tiles.addWidget(blocks._tile_widget(label, value, color, sub, None), 1)
+        v.addLayout(tiles)
+        root.addWidget(card)
+
+        # What We Tested, by day
+        card, v = self._card("What We Tested", f"{len(shown)} session{'s' if len(shown) != 1 else ''} · {rtext}")
+        if not shown:
+            v.addWidget(_small_label(f"No test sessions logged in {rtext}.", MUTED))
+        day = None
+        for e, s in shown:
+            if s["date"] != day:
+                day = s["date"]
+                lbl = QLabel(date.fromisoformat(day).strftime("%A, %b %-d"))
+                lbl.setStyleSheet("font-size:13px; font-weight:bold; color:#52514E; padding-top:6px;")
+                v.addWidget(lbl)
+            box = QFrame()
+            box.setObjectName("tile")
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(14, 10, 14, 12)
+            bl.setSpacing(4)
+            bl.addWidget(self._rich(
+                f'<b style="font-size:14px">{html.escape(e["name"])}</b>&nbsp; {self._pill(e["product"])}'
+                f'&nbsp; {self._jira(s["ticket"], "Session " + str(s["n"]))}', 13))
+            meta = " · ".join(html.escape(x) for x in (", ".join(s["testers"]), s["time"],
+                                                        s["build"] and "Build " + s["build"], s["system"]) if x)
+            if s["bugs"]:
+                meta += " · Bugs: " + ", ".join(self._jira(k) for k in s["bugs"])
+            bl.addWidget(self._rich(meta, 12, "#8A8984"))
+            notes = "".join(f'<div style="margin-left:{14 * ((len(ln) - len(ln.lstrip())) // 2)}px">'
+                            f'{_linkify(ln.strip())}</div>' for ln in s["notes"][:16])
+            if len(s["notes"]) > 16:
+                notes += (f'<div style="color:#8A8984">… {len(s["notes"]) - 16} more lines — '
+                          f'{self._jira(s["ticket"], "open in JIRA")}</div>')
+            if notes:
+                bl.addWidget(self._rich(notes, 12))
+            v.addWidget(box)
+        root.addWidget(card)
+
+        # efforts
+        card, v = self._card("Tested in These Dates", f"{len(tested)} effort{'s' if len(tested) != 1 else ''} · {rtext}")
+        if tested:
+            v.addWidget(self._effort_table(tested, rng, today))
+        else:
+            v.addWidget(_small_label(f"No test efforts with sessions in {rtext}.", MUTED))
+        root.addWidget(card)
+        card, v = self._card("Not Tested in These Dates", "active efforts with no session in the dates — "
+                             "including new tickets with no sessions logged yet")
+        if untested:
+            v.addWidget(self._effort_table(untested, rng, today))
+        else:
+            v.addWidget(_small_label("Every active effort was tested in these dates.", MUTED))
+        root.addWidget(card)
+        root.addStretch(1)
+        pos = self.scroll.verticalScrollBar().value()
+        self.scroll.setWidget(body)
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(pos))
 
 
 def _linkify(text):
@@ -3945,92 +4126,6 @@ def _linkify(text):
         last = m.end()
     parts.append(esc(text[last:]))
     return "".join(parts)
-
-
-def feature_testing_html(testing, rng, range_text, product=None, search=""):
-    esc = html.escape
-    q = search.strip().lower()
-    today = date.today()
-
-    def hay(e, s=None):
-        bits = [e["name"], e["status"], " ".join(e["assignees"]), " ".join(t["key"] for t in e["tickets"])]
-        if s:
-            bits += [s["build"], s["system"], " ".join(s["testers"]), " ".join(s["notes"]), " ".join(s["bugs"])]
-        return " ".join(bits).lower()
-
-    efforts = [e for e in feature_testing.efforts(testing) if not product or e["product"] == product]
-    tested = [e for e in feature_testing.efforts_in(testing, rng) if not product or e["product"] == product]
-    shown = [(e, s) for e, s in feature_testing.sessions_in(testing, rng)
-             if (not product or e["product"] == product) and (not q or q in hay(e, s))]
-    active = [e for e in efforts if e["status_category"] != "done"]
-    stale = [e for e in active if not e["last"] or (today - date.fromisoformat(e["last"])).days > 7]
-    testers = {x for _, s in shown for x in s["testers"]}
-    bugs = list(dict.fromkeys(k for _, s in shown for k in s["bugs"]))
-
-    def tile(label, value, sub="", color="#1A1A18"):
-        return (f'<td bgcolor="#F7F7F5" style="padding:10px 16px"><span style="font-size:12px; color:#52514E">'
-                f'{esc(label)}</span><br><span style="font-size:24px; font-weight:bold; color:{color}">{value}</span>'
-                f'<br><span style="font-size:11px; color:#8A8984">{esc(sub)}</span></td><td width="10"></td>')
-
-    def jira(key, label=None):
-        return f'<a href="{changelog.JIRA_SITE}/browse/{esc(key)}">{esc(label or key)}</a>'
-
-    def pill(text, bg="#F1EFE8", fg="#52514E"):
-        return f'<span style="background:{bg}; color:{fg}; font-size:11px">&nbsp;{esc(text)}&nbsp;</span>'
-
-    out = [f'''<p style="font-size:22px; font-weight:bold; margin:6px 0 10px 0">Feature Testing</p>
-<table cellspacing="0" cellpadding="0" style="margin-bottom:14px"><tr>
-{tile("Efforts tested", len(tested), f"{len(active)} active in JIRA")}
-{tile("Sessions", len(shown), range_text)}
-{tile("Testers", len(testers), range_text)}
-{tile("Bugs linked", len(bugs), range_text)}
-{tile("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else "#1A1A18")}
-</tr></table>''']
-
-    out.append(f'<p style="font-size:16px; font-weight:bold; margin:14px 0 6px 0">What We Tested '
-               f'<span style="color:#8A8984; font-weight:normal; font-size:13px">{esc(range_text)}</span></p>')
-    if not shown:
-        out.append(f'<p style="color:#8A8984">No test sessions logged in {esc(range_text)}.</p>')
-    for e, s in shown:
-        day = date.fromisoformat(s["date"]).strftime("%a %b %-d")
-        meta = " · ".join(x for x in (", ".join(s["testers"]), s["time"], s["build"] and "Build " + s["build"],
-                                       s["system"]) if x)
-        notes = "".join(f'<div style="margin-left:{12 * (len(ln) - len(ln.lstrip()))}px">{_linkify(ln.strip())}</div>'
-                        for ln in s["notes"][:14])
-        more = f'<div style="color:#8A8984">… {len(s["notes"]) - 14} more lines in JIRA</div>' if len(s["notes"]) > 14 else ""
-        bug_html = (" &nbsp; Bugs: " + ", ".join(jira(k) for k in s["bugs"])) if s["bugs"] else ""
-        out.append(f'''<table width="100%" cellspacing="0" cellpadding="10" style="margin-bottom:8px"><tr>
-<td style="border:1px solid #E6E4E0"><b style="font-size:14px">{esc(e["name"])}</b> &nbsp;{pill(e["product"])}
-&nbsp; <span style="color:#52514E">{jira(s["ticket"], f"Session {s['n']}")} · {esc(day)}</span><br>
-<span style="color:#8A8984; font-size:12px">{esc(meta)}{bug_html}</span>
-<div style="margin-top:6px; font-size:12px; color:#1A1A18">{notes}{more}</div></td></tr></table>''')
-
-    out.append(f'<p style="font-size:16px; font-weight:bold; margin:18px 0 6px 0">Test Efforts '
-               f'<span style="color:#8A8984; font-weight:normal; font-size:13px">with sessions in '
-               f'{esc(range_text)}</span></p>')
-    rows = []
-    for e in tested:
-        if q and q not in hay(e):
-            continue
-        if e["last"]:
-            ago = (today - date.fromisoformat(e["last"])).days
-            last = "today" if ago == 0 else f"{ago} day{'s' if ago != 1 else ''} ago"
-            last_color = "#B26B00" if ago > 7 and e["status_category"] != "done" else "#52514E"
-        else:
-            last, last_color = "no sessions logged yet", "#8A8984"
-        chain = " → ".join(jira(t["key"], (f"PT{t['part']} " if len(e["tickets"]) > 1 else "") + t["key"])
-                           for t in e["tickets"])
-        done = e["status_category"] == "done"
-        rows.append(f'''<tr><td style="padding:8px 10px 8px 0; border-top:1px solid #ECEAE6"><b>{esc(e["name"])}</b>
-&nbsp;{pill(e["product"])}<br><span style="font-size:12px">{chain}</span></td>
-<td style="padding:8px 10px; border-top:1px solid #ECEAE6">{pill(e["status"], "#E3F4E1" if done else "#F1EFE8", "#0B7A0B" if done else "#52514E")}</td>
-<td style="padding:8px 10px; border-top:1px solid #ECEAE6; color:#52514E">{esc(", ".join(e["assignees"]))}</td>
-<td style="padding:8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["in_range"])} of {len(e["sessions"])} session{"s" if len(e["sessions"]) != 1 else ""}<br>
-<span style="font-size:12px; color:{last_color}">last {esc(last)}</span></td>
-<td style="padding:8px 0 8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["bugs"])} bug{"s" if len(e["bugs"]) != 1 else ""}</td></tr>''')
-    out.append(f'<table width="100%" cellspacing="0">{"".join(rows)}</table>' if rows else
-               f'<p style="color:#8A8984">No test efforts with sessions in {esc(range_text)}.</p>')
-    return "".join(out)
 
 
 class Dashboard(QScrollArea):
@@ -4537,6 +4632,8 @@ class TrackerApp(QMainWindow):
         self.tabs.addTab(self.changelog_page, "📝 Change Log")
         self.testing_page = FeatureTestingPage(self)
         self.tabs.addTab(self.testing_page, "🧪 Feature Testing")
+        self._dash_layout = dash_lay
+        self.tabs.currentChanged.connect(self._place_date_bar)
         self.empty = QLabel("Add your test-tracking Google Sheet in ⚙ Settings to get started.")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setStyleSheet(f"color:{MUTED}; font-size:14px;")
@@ -5428,6 +5525,15 @@ class TrackerApp(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if reply == QMessageBox.Yes:
             self._run_installer(r["zip"])
+
+    def _place_date_bar(self, *_):
+        """One Dates bar for the dashboard and the Feature Testing tab: it moves to whichever is open."""
+        if self.tabs.currentWidget() is self.testing_page:
+            if self.date_bar.parent() is not self.testing_page:
+                self.testing_page.date_slot.addWidget(self.date_bar)
+        elif self.date_bar.parent() is self.testing_page:
+            self._dash_layout.insertWidget(1, self.date_bar)       # back under the view bar
+        self.date_bar.refresh()
 
     # ── feature testing from JIRA ─────────────────────────────────────────────
 
