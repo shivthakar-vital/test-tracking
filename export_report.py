@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import QWidget
 
 import blocks
 import charts
+import export_paint
 import export_sections
 import layout as lay
 import tracker_store as store
@@ -155,8 +156,11 @@ class Snapshot:
     and the last card of each column stretches so the columns end flush."""
 
     def __init__(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="wide",
-                 arrangement=None, entries=None, sections=None):
+                 arrangement=None, entries=None, sections=None, theme="light"):
         self.data, self.rng, self.range_text, self.style = data, rng, range_text, style
+        # dark is for the drawn sections; the advanced card export is light only
+        self.theme = theme if theme in export_paint.THEMES and sections is not None else "light"
+        self.tc = export_paint.THEMES[self.theme]
         self.settings = settings or {}
         charts.set_overrides(store.color_overrides(self.settings))
         charts.register(data)            # same colors as the dashboard
@@ -190,8 +194,16 @@ class Snapshot:
     # ── page layouts ──────────────────────────────────────────────────────────
 
     def _render(self, p, width):
-        if "section" in p:
-            title, doc = self._section(p["section"], width, p["i"])
+        if "section" in p:                           # drawn to the design (export_paint)
+            pad = 28
+            item = export_paint.Painter(self.data, self.ctx, self.sections, self.theme).build(
+                p["section"], width - 2 * pad)
+            title = export_sections.SECTIONS[p["section"]][0]
+            if item is None:
+                item = export_paint.vstack([export_paint.Kit(self.theme).heading(title, "", width - 2 * pad),
+                                            export_paint.Kit(self.theme).note("Nothing to show.", width - 2 * pad)], 14)
+            return {"key": p["key"], "title": title, "w": width, "h": math.ceil(item.h + 2 * pad),
+                    "paint": lambda painter, x, y, it=item: it.draw(painter, x + pad, y + pad)}
         else:
             title, doc = self._card(p["card"], p["tabs"], p["chosen"], width, p["i"])
         return {"key": p["key"], "title": title, "doc": doc, "w": width,
@@ -460,11 +472,12 @@ class Snapshot:
         font.setPixelSize(13)
         doc.setDefaultFont(font)
         doc.setDocumentMargin(0)
+        t = self.tc
         doc.setHtml(f'''
 <table width="100%" cellspacing="0" cellpadding="0"><tr>
-  <td><span style="font-size:24px; font-weight:bold; color:{INK}">{esc(self.data["title"])}</span><br>
-      <span style="font-size:15px; color:{INK2}">Testing snapshot · <b>{esc(self.range_text)}</b></span></td>
-  <td align="right" valign="bottom" style="color:{MUTED}; font-size:11px">
+  <td><span style="font-size:26px; font-weight:bold; color:{t["ink"]}">{esc(self.data["title"])}</span><br>
+      <span style="font-size:15px; color:{t["ink2"]}">Testing snapshot · <b>{esc(self.range_text)}</b></span></td>
+  <td align="right" valign="bottom" style="color:{t["muted"]}; font-size:11px">
       Generated {datetime.now():%b %-d, %Y at %-I:%M %p}<br>Test Tracker · sheet data from {self._synced()}</td>
 </tr></table>''')
         doc.setTextWidth(width)
@@ -473,17 +486,21 @@ class Snapshot:
     def _paint(self, p, cards, width, height):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        p.fillRect(QRectF(0, 0, width, height), QColor(PAGE_BG))
+        t = self.tc
+        p.fillRect(QRectF(0, 0, width, height), QColor(t["page"]))
         p.save()
         p.translate(MARGIN, MARGIN)
         self._header_doc(width - 2 * MARGIN).drawContents(p)
         p.restore()
         for c in cards:
             path = QPainterPath()
-            path.addRoundedRect(QRectF(c["x"] + 0.5, c["y"] + 0.5, c["w"] - 1, c["draw_h"] - 1), 10, 10)
-            p.setPen(QPen(QColor(LINE), 1))
-            p.setBrush(QColor(CARD_BG))
+            path.addRoundedRect(QRectF(c["x"] + 0.5, c["y"] + 0.5, c["w"] - 1, c["draw_h"] - 1), 14, 14)
+            p.setPen(QPen(QColor(t["border"]), 1))
+            p.setBrush(QColor(t["card"]))
             p.drawPath(path)
+            if "paint" in c:
+                c["paint"](p, c["x"], c["y"])
+                continue
             p.save()
             p.translate(c["x"], c["y"])
             c["doc"].drawContents(p, QRectF(0, 0, c["w"], c["h"]))
@@ -493,7 +510,7 @@ class Snapshot:
         cards = self.cards if cards is None else cards
         w, h = size or (self.width, self.page_h)
         img = QImage(int(w * SCALE), int(h * SCALE), QImage.Format_ARGB32_Premultiplied)
-        img.fill(QColor(PAGE_BG))
+        img.fill(QColor(self.tc["page"]))
         p = QPainter(img)
         p.scale(SCALE, SCALE)
         self._paint(p, cards, w, h)

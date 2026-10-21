@@ -2596,10 +2596,20 @@ class ExportDialog(QDialog):
         self.content.setCurrentIndex(max(self.content.findData(saved.get("content", "sections")), 0))
         self.content.currentIndexChanged.connect(self._content_changed)
         form.addRow("Content", self.content)
+        self.theme = QComboBox()
+        self.theme.addItem("Light", "light")
+        self.theme.addItem("Dark", "dark")
+        self.theme.setCurrentIndex(max(self.theme.findData(saved.get("theme", "light")), 0))
+        self.theme.setToolTip("Light or dark page (Sections)")
+        self.theme.currentIndexChanged.connect(self._update)
         form.addRow("View", self.view_box)
         self.view_row_label = form.labelForField(self.view_box)
         form.addRow("Dates", dates)
-        form.addRow("Layout", self.style)
+        layout_row = QHBoxLayout()
+        layout_row.addWidget(self.style, 1)
+        layout_row.addWidget(_small_label("Theme"))
+        layout_row.addWidget(self.theme)
+        form.addRow("Layout", layout_row)
         form.addRow("Save to", where)
         left = QVBoxLayout()
         left.setSpacing(10)
@@ -2672,7 +2682,7 @@ class ExportDialog(QDialog):
 
     def _default_settings(self):
         return {"preset": "Today", "style": "wide", "picks": {}, "arrangement": None,
-                "folder": self.folder, "view": views.MAIN, "content": "sections",
+                "folder": self.folder, "view": views.MAIN, "content": "sections", "theme": "light",
                 "sections": export_sections.default_config()}
 
     def _content_changed(self, *_, reset=True):
@@ -2682,6 +2692,7 @@ class ExportDialog(QDialog):
         if self.side_tabs.currentIndex() in (0, 1):
             self.side_tabs.setCurrentIndex(0 if simple else 1)
         self.view_box.setEnabled(not simple)
+        self.theme.setEnabled(simple)
         self.view_box.setToolTip("" if not simple else "Views apply to Cards (advanced)")
         if reset and self.arrange.custom:
             self.arrange.custom = False               # a different set of cards: arrange afresh
@@ -2691,6 +2702,7 @@ class ExportDialog(QDialog):
     def current_settings(self):
         return {"preset": self.preset.currentText(), "style": self.style.currentData(),
                 "content": self.content.currentData(), "sections": self.sections.config(),
+                "theme": self.theme.currentData(),
                 "view": self.view_box.currentData(),
                 "picks": dict(self.picks), "folder": self.folder,
                 "arrangement": self.arrange.arrangement() if self.arrange.custom else None}
@@ -2726,6 +2738,7 @@ class ExportDialog(QDialog):
                                                                          else "sections")), 0))
         self.content.blockSignals(False)
         self.sections.load(p.get("sections") or export_sections.default_config())
+        self.theme.setCurrentIndex(max(self.theme.findData(p.get("theme", "light")), 0))
         self._content_changed(reset=False)
         self.folder = p.get("folder") or self.folder
         self.picks = dict(p.get("picks") or {})
@@ -2740,7 +2753,7 @@ class ExportDialog(QDialog):
         self._update()
 
     def _same(self, a, b):
-        keys = ("preset", "style", "picks", "arrangement", "folder", "view", "content", "sections")
+        keys = ("preset", "style", "picks", "arrangement", "folder", "view", "content", "sections", "theme")
         norm = lambda s: json.dumps({k: (s or {}).get(k) for k in keys}, sort_keys=True)
         return norm(a) == norm(b)
 
@@ -2940,7 +2953,8 @@ class ExportDialog(QDialog):
         return export_report.Snapshot(self.win.data, self.rng(), self.label(), _settings(self.win),
                                       layouts=self.layouts, picks=self.picks, style=self.style.currentData(),
                                       arrangement=arrangement, entries=None if simple else self.view_entries(),
-                                      sections=self.sections.config() if simple else None)
+                                      sections=self.sections.config() if simple else None,
+                                      theme=self.theme.currentData())
 
     def _update(self, *_):
         name = self.preset.currentText()
