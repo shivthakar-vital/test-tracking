@@ -242,6 +242,17 @@ def efforts(testing):
     out.sort(key=lambda e: (e["last"] or e["updated"] or ""), reverse=True)
     return out
 
+def efforts_in(testing, rng):
+    """Efforts with at least one session dated in rng (all dates: any session), newest first,
+    each with "in_range": its sessions in rng."""
+    lo, hi = (rng[0].isoformat(), rng[1].isoformat()) if rng else ("", "9999")
+    out = []
+    for e in efforts(testing):
+        hits = [s for s in e["sessions"] if s["date"] and lo <= s["date"] <= hi]
+        if hits:
+            out.append(dict(e, in_range=hits))
+    return out
+
 def sessions_in(testing, rng):
     """[(effort, session)] dated in rng (first day, last day), newest first."""
     out = []

@@ -717,6 +717,7 @@ class Painter(es.Renderer):
         k, ctx = self.k, self.ctx
         keep = lambda e: es.chosen(self.cfg, e["product"])
         efforts = [e for e in ft.efforts(testing) if keep(e)]
+        tested = [e for e in ft.efforts_in(testing, ctx.rng) if keep(e)]
         shown = [(e, s) for e, s in ft.sessions_in(testing, ctx.rng) if keep(e)]
         active = [e for e in efforts if e["status_category"] != "done"]
         today = date.today()
@@ -724,8 +725,7 @@ class Painter(es.Renderer):
         bugs = list(dict.fromkeys(b for _, s in shown for b in s["bugs"]))
         body = [k.tiles([("Sessions", len(shown), ctx.range_text, "ink"),
                          ("Bugs linked", len(bugs), "from those sessions", "ink"),
-                         ("Active efforts", len(active), f"{len(stale)} with no session in 7+ days",
-                          "warn" if stale else "ink")], width)]
+                         ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width)]
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
         if self.opt("testing", "sessions"):
             if shown:
@@ -743,16 +743,16 @@ class Painter(es.Renderer):
             else:
                 body.append(vstack([k.label("What We Tested", width),
                                     k.note(f"No test sessions logged in {ctx.range_text}.", width)], 6))
-        if self.opt("testing", "efforts") and efforts:
+        if self.opt("testing", "efforts") and tested:
             rows = []
-            for e in efforts:
+            for e in tested:
                 if e["last"]:
                     ago = (today - date.fromisoformat(e["last"])).days
                     last = "last session today" if ago == 0 else f"last session {es._plural(ago, 'day')} ago"
                 else:
                     last = "no sessions logged yet"
                 rows.append(dict(link_html=jira(e["key"], e["key"]), tag=e["product"], text=e["name"],
-                                 note=f"{es._plural(len(e['sessions']), 'session')} · {last}" if e["sessions"] else last,
+                                 note=f"{es._plural(len(e['in_range']), 'session')} in these dates · {last}",
                                  right=e["status"],
                                  right_color="good" if e["status_category"] == "done" else "ink2"))
             body.append(vstack([k.label("Test Efforts", width), self._effort_rows(rows, width)], 6))

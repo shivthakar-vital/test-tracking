@@ -2,7 +2,7 @@
 
 ## 2.3.1 (testing)
 - **🧪 Feature Testing**, from JIRA's Testing tickets (your JQL; the admin can change it with **JQL…**). The app reads every **session panel** testers log in a ticket — date, testers, build, test system, notes, and the PROD bugs linked — and treats clones of one ticket (PT2, PT3…) as one test effort.
-  - **🧪 Feature Testing tab**: Active efforts, Sessions, Testers, Bugs linked, and efforts with **no session in 7+ days**; **What We Tested** (each session in the dashboard's dates, with its notes and bugs); **Test Efforts** (status, assignee, sessions, last session, bugs). Filter by product and search.
+  - **🧪 Feature Testing tab**: Efforts tested, Sessions, Testers, Bugs linked, and efforts with **no session in 7+ days**; **What We Tested** (each session in the dashboard's dates, with its notes and bugs); **Test Efforts** — only those with sessions in the dates (status, assignee, sessions, last session, bugs). Filter by product and search.
   - **Export section**: Feature Testing — tiles, What We Tested, Test Efforts.
   - **SQL**: `testing` and `test_sessions` tables.
   - Synced from JIRA by the admin's app every 10 minutes (and with **↻ Sync from JIRA**) into a hidden tab of the sheet, so everyone sees it without a token.

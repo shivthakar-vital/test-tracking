@@ -3959,6 +3959,7 @@ def feature_testing_html(testing, rng, range_text, product=None, search=""):
         return " ".join(bits).lower()
 
     efforts = [e for e in feature_testing.efforts(testing) if not product or e["product"] == product]
+    tested = [e for e in feature_testing.efforts_in(testing, rng) if not product or e["product"] == product]
     shown = [(e, s) for e, s in feature_testing.sessions_in(testing, rng)
              if (not product or e["product"] == product) and (not q or q in hay(e, s))]
     active = [e for e in efforts if e["status_category"] != "done"]
@@ -3979,7 +3980,7 @@ def feature_testing_html(testing, rng, range_text, product=None, search=""):
 
     out = [f'''<p style="font-size:22px; font-weight:bold; margin:6px 0 10px 0">Feature Testing</p>
 <table cellspacing="0" cellpadding="0" style="margin-bottom:14px"><tr>
-{tile("Active test efforts", len(active), f"{len(efforts)} in JIRA")}
+{tile("Efforts tested", len(tested), f"{len(active)} active in JIRA")}
 {tile("Sessions", len(shown), range_text)}
 {tile("Testers", len(testers), range_text)}
 {tile("Bugs linked", len(bugs), range_text)}
@@ -4004,9 +4005,11 @@ def feature_testing_html(testing, rng, range_text, product=None, search=""):
 <span style="color:#8A8984; font-size:12px">{esc(meta)}{bug_html}</span>
 <div style="margin-top:6px; font-size:12px; color:#1A1A18">{notes}{more}</div></td></tr></table>''')
 
-    out.append('<p style="font-size:16px; font-weight:bold; margin:18px 0 6px 0">Test Efforts</p>')
+    out.append(f'<p style="font-size:16px; font-weight:bold; margin:18px 0 6px 0">Test Efforts '
+               f'<span style="color:#8A8984; font-weight:normal; font-size:13px">with sessions in '
+               f'{esc(range_text)}</span></p>')
     rows = []
-    for e in efforts:
+    for e in tested:
         if q and q not in hay(e):
             continue
         if e["last"]:
@@ -4022,11 +4025,11 @@ def feature_testing_html(testing, rng, range_text, product=None, search=""):
 &nbsp;{pill(e["product"])}<br><span style="font-size:12px">{chain}</span></td>
 <td style="padding:8px 10px; border-top:1px solid #ECEAE6">{pill(e["status"], "#E3F4E1" if done else "#F1EFE8", "#0B7A0B" if done else "#52514E")}</td>
 <td style="padding:8px 10px; border-top:1px solid #ECEAE6; color:#52514E">{esc(", ".join(e["assignees"]))}</td>
-<td style="padding:8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["sessions"])} session{"s" if len(e["sessions"]) != 1 else ""}<br>
+<td style="padding:8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["in_range"])} of {len(e["sessions"])} session{"s" if len(e["sessions"]) != 1 else ""}<br>
 <span style="font-size:12px; color:{last_color}">last {esc(last)}</span></td>
 <td style="padding:8px 0 8px 10px; border-top:1px solid #ECEAE6" align="right">{len(e["bugs"])} bug{"s" if len(e["bugs"]) != 1 else ""}</td></tr>''')
     out.append(f'<table width="100%" cellspacing="0">{"".join(rows)}</table>' if rows else
-               '<p style="color:#8A8984">Nothing matches.</p>')
+               f'<p style="color:#8A8984">No test efforts with sessions in {esc(range_text)}.</p>')
     return "".join(out)
 
 
