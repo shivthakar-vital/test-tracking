@@ -1,5 +1,16 @@
 # What's new
 
+## 2.3.0 (testing)
+- **A simpler, cleaner export: Sections.** Pick **End-to-End Runs**, **Error Analysis**, **New Bugs**, and **Change Log**, put them in any order, and choose a few options for each:
+  - **End-to-End Runs**: Run Status (donut + Runs and Unresolved), Runs Per Software Version, Failed Runs (reason · subsystem · note, and how long it's been open); optional Pass Rate By Day and Coder vs Atlantis.
+  - **Error Analysis**: Reason pie, Subsystem bars; optional Unresolved With Notes.
+  - **New Bugs**: the bugs opened in the dates you pick; optional Closed Bugs and All-Bugs Status.
+  - **Change Log**: the latest one, with its category counts and what's In QA.
+- **Products**: show VitalOne, Viking, or both — **side by side** or **combined** — across every section.
+- The card-by-card picker is still there as **Content → Cards (advanced)**. Profiles remember everything.
+- Fix: the dashboard's **Per day** charts showed "Couldn't draw this chart".
+
+
 ## 2.2.0
 - **📝 Change Log** tab: what changed between two software versions of VitalBio/device-sw — the PRs merged (who, when, hash) and the PROD tickets they touched (summary, type, priority, status, fix version).
   - Tiles for **New features, Improvements, Bug fixes, GUI / UX, Infrastructure & tooling, Release**, and **In QA** (PRs whose JIRA ticket is in QA). Click a tile to filter.

@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import QWidget
 
 import blocks
 import charts
+import export_sections
 import layout as lay
 import tracker_store as store
 
@@ -154,7 +155,7 @@ class Snapshot:
     and the last card of each column stretches so the columns end flush."""
 
     def __init__(self, data, rng, range_text, settings=None, layouts=None, picks=None, style="wide",
-                 arrangement=None, entries=None):
+                 arrangement=None, entries=None, sections=None):
         self.data, self.rng, self.range_text, self.style = data, rng, range_text, style
         self.settings = settings or {}
         charts.set_overrides(store.color_overrides(self.settings))
@@ -165,7 +166,13 @@ class Snapshot:
                               sheet_url=data.get("url", ""))
         self.kpis, self.donuts = [], []  # for the Slack summary
         self.planned = []
-        for i, (card, tabs, chosen) in enumerate(plan(data, layouts, picks, entries)):
+        self.sections = export_sections.normalized(sections) if sections is not None else None
+        if self.sections is not None:              # the simple export: sections, not cards
+            on = [sid for sid in self.sections["order"] if self.sections["on"].get(sid)]
+            self.planned = [{"key": "section:" + sid, "section": sid, "i": i} for i, sid in enumerate(on)]
+            self.kpis = export_sections.kpis(data, self.ctx, self.sections)
+        for i, (card, tabs, chosen) in enumerate([] if self.sections is not None
+                                                 else plan(data, layouts, picks, entries)):
             self.kpis += [(_kind(card, tabs), k) for k in _kpis(card, tabs, self.ctx)]
             self.planned.append({"key": card_key(tabs[0], card), "card": card, "tabs": tabs,
                                  "chosen": chosen, "i": i})
@@ -177,12 +184,16 @@ class Snapshot:
 
     def card_titles(self):
         """{card key: title} for every card going into the export (for the arrange editor)."""
-        return {p["key"]: combined_title(p["card"], p["tabs"]) for p in self.planned}
+        return {p["key"]: export_sections.SECTIONS[p["section"]][0] if "section" in p
+                else combined_title(p["card"], p["tabs"]) for p in self.planned}
 
     # ── page layouts ──────────────────────────────────────────────────────────
 
     def _render(self, p, width):
-        title, doc = self._card(p["card"], p["tabs"], p["chosen"], width, p["i"])
+        if "section" in p:
+            title, doc = self._section(p["section"], width, p["i"])
+        else:
+            title, doc = self._card(p["card"], p["tabs"], p["chosen"], width, p["i"])
         return {"key": p["key"], "title": title, "doc": doc, "w": width,
                 "h": math.ceil(doc.size().height())}
 
@@ -254,6 +265,67 @@ class Snapshot:
         avail = page_w - 2 * MARGIN - GAP * (len(cols) - 1)
         total = sum(c["share"] for c in cols) or 1
         return [max(MIN_COL_W, int(avail * c["share"] / total)) for c in cols]
+
+    # ── one section (the simple export) ───────────────────────────────────────
+
+    def _section(self, sid, width, index):
+        images = {}
+        prefix = f"s{index}w{width}i"
+        inner = width - 2 * PAD
+
+        def img(widget, w=None):
+            widget.setAttribute(Qt.WA_DontShowOnScreen)
+            if w and not isinstance(widget, charts.DonutChart):
+                widget.setFixedWidth(int(min(w, inner)))
+            widget.ensurePolished()
+            if isinstance(widget, charts.ComponentTally):
+                widget.resize(int(min(w or inner, inner)), 100)
+                widget._relayout()
+            ww, hh = widget.width(), widget.height()
+            im = QImage(ww * SCALE, hh * SCALE, QImage.Format_ARGB32_Premultiplied)
+            im.setDevicePixelRatio(SCALE)
+            im.fill(QColor(CARD_BG))
+            p = QPainter(im)
+            widget.render(p, flags=QWidget.RenderFlags(QWidget.DrawChildren))
+            p.end()
+            name = f"{prefix}{len(images)}.png"
+            images[name] = im
+            if isinstance(widget, charts.DonutChart):          # for the Slack summary
+                kind = {"e2e": 0, "errors": 1, "bugs": 2}.get(sid, 3)
+                self.donuts.append((kind, index, export_sections.SECTIONS[sid][0], pending[0] or "", im))
+            limit = min(w or inner, inner)
+            if ww > limit:                                     # too wide for its column: shrink it
+                hh, ww = int(hh * limit / ww), int(limit)
+            return f'<img src="{name}" width="{ww}" height="{hh}">'
+
+        pending = [None]
+        title = export_sections.SECTIONS[sid][0]
+        r = export_sections.Renderer(self.data, self.ctx, self.sections, img, inner,
+                                     donut_hook=lambda t, w: pending.__setitem__(0, t))
+        try:
+            made = r.render(sid)
+        except Exception as exc:                     # one broken section doesn't stop the export
+            made = (title, "", f'<span style="color:{MUTED}">Couldn\'t draw this '
+                               f'({esc(type(exc).__name__)}: {esc(str(exc))})</span>')
+        if made is None:
+            made = (title, "", f'<span style="color:{MUTED}">Nothing to show.</span>')
+        title, sub, body = made
+        head = (f'<p style="margin:0 0 10px 0"><b style="font-size:17px; color:{INK}">{esc(title)}</b>'
+                f'&nbsp;&nbsp;<span style="font-size:12px; color:{MUTED}">{esc(sub)}</span></p>')
+        doc = QTextDocument()
+        font = QFont()
+        font.setPixelSize(13)
+        doc.setDefaultFont(font)
+        doc.setDocumentMargin(PAD)
+        doc.setDefaultStyleSheet(f'''
+            a {{ color: #2F5E9E; text-decoration: none; }}
+            code {{ font-size: 12px; }}
+            td {{ color: {INK}; font-size: 12px; }}''')
+        for name, im in images.items():
+            doc.addResource(QTextDocument.ImageResource, QUrl(name), im)
+        doc.setHtml(head + body)
+        doc.setTextWidth(width)
+        return title, doc
 
     # ── one card ──────────────────────────────────────────────────────────────
 

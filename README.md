@@ -21,22 +21,15 @@ are written straight back to the sheet.
   *This month*, *On a date…*, or a *Date range…*. It narrows every chart and card for tabs that
   have a date column (e.g. the end-to-end run trackers); other tabs show everything. Clicking
   a chart opens the table with the same dates applied. Your choice is remembered.
-- **⬇ Export snapshot**: pick a date range (Today by default), tick which cards and charts to
-  include (the defaults come from each card's ✎ Customize settings), and pick a layout:
-  - **Wide** (default): cards in columns. The app balances the columns automatically, or open
-    **Arrange the page** to drag cards between columns, drag the dividers to resize columns,
-    add columns, and pick the page width. Your arrangement is remembered. Columns always end
-    flush (the last card in each stretches), so unticking a card never leaves a gap.
-  - **Slack summary + wide page**: a 16:9 summary PNG (headline numbers and key donuts) plus the
-    wide page. **One column**, or **One image per card**.
-  Saves a **PNG** and a matching **PDF** (run names, bug keys and notes are clickable), with a
-  live preview.
-  - **One combined Error Analysis (VitalOne + Viking)** (under the list of what to include):
-    untick it to export a separate Error Analysis card for each tracker. Saved with profiles.
-  - **Profiles**: save the whole setup (dates, layout, folder, what's ticked, the arrangement)
-    with **Save as new…** and switch between them from the **Profile** menu. **Default** is the
-    built-in settings and is always there. *● edited* means the settings differ from the chosen
-    profile; **Save** updates it. Profiles are kept on your computer.
+- **⬇ Export snapshot**: pick the dates and **Content**:
+  - **Sections (simple, default)**: End-to-End Runs · Error Analysis · New Bugs · Change Log, in the
+    order you choose, each with a few options (e.g. Run Status, Runs Per Software Version, Failed Runs;
+    Reason, Subsystem; Show Closed Bugs). **Products** shows VitalOne, Viking, or both — side by
+    side or combined.
+  - **Cards (advanced)**: tick any dashboard card and chart, from MAIN or a view.
+  Layouts: **Wide** (cards in balanced columns; **Arrange the page** to drag them), **Slack summary**,
+  **One column**, **One image per card**. Saves a **PNG** and a matching **PDF** (runs, bug keys and
+  notes are clickable), with a live preview. **Profiles** save the whole setup.
 - **Bug summary** (tabs with *Created* and *Date Done* columns, like *Automated Bug Statuses*):
   cards for **Open now**, **New**, **Closed**, and **In QA**, a one-line summary, and lists of
   the new, closed, and in-QA bugs with clickable Jira keys. *New* and *Closed* follow the

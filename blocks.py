@@ -273,7 +273,6 @@ def _days(b, tabs, ctx):
     if not days:
         return None
     order = charts.status_order({s for g in days.values() for s in g}, status["options"] if status else [])
-    legend = _legend(series_vals, colors) if si is not None else None
     chart = charts.DayColumns()
     chart.set_data([(d, [(v, days[d][v], colors.get(v, charts.PROGRESS)) for v in order]) for d in sorted(days)])
 

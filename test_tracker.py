@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QTabWidget, QScrollArea, QStyledItemDelegate, QDateEdit, QMenu,
     QToolButton, QWidgetAction, QListWidget, QListWidgetItem, QPlainTextEdit,
     QAbstractItemView, QListView, QSizePolicy, QColorDialog, QInputDialog, QTreeWidget,
-    QTreeWidgetItem, QSplitter, QTableWidget, QTableWidgetItem, QTabBar, QTextBrowser
+    QTreeWidgetItem, QSplitter, QTableWidget, QTableWidgetItem, QTabBar, QTextBrowser, QRadioButton
 )
 from PyQt5.QtCore import (
     Qt, QObject, QRunnable, QThreadPool, QTimer, QUrl, QDate, pyqtSignal,
@@ -40,14 +40,15 @@ import changelog
 import chartquery
 import charts
 import export_report
+import export_sections
 import layout
 import sqldata
 import tracker_store as store
 import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "2.2.0"         # bump this for each release, then push a matching tag (v2.2.0)
-APP_CHANNEL = "stable"        # "stable" or "testing": testing releases are published as GitHub
+APP_VERSION = "2.3.0"         # bump this for each release, then push a matching tag (v2.3.0)
+APP_CHANNEL = "testing"       # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
 REPO        = "shivthakar-vital/test-tracking"
@@ -2359,6 +2360,136 @@ class ArrangePanel(QWidget):
         self.changed.emit()
 
 
+class SectionsPanel(QWidget):
+    """The simple export: which products, and which sections (in order) with their options."""
+    changed = pyqtSignal()
+
+    def __init__(self, products):
+        super().__init__()
+        self.products = products
+        self.cfg = export_sections.default_config()
+        self._loading = False
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 6, 0, 0)
+        root.setSpacing(6)
+        prod = QHBoxLayout()
+        lbl = QLabel("Products")
+        lbl.setStyleSheet("font-weight:bold; font-size:13px;")
+        prod.addWidget(lbl)
+        self.prod_boxes = {}
+        for name in products:
+            b = QCheckBox(name)
+            b.setChecked(True)
+            b.toggled.connect(self._edited)
+            self.prod_boxes[name] = b
+            prod.addWidget(b)
+        prod.addSpacing(10)
+        self.side = QRadioButton("Side by Side")
+        self.combined = QRadioButton("Combined")
+        self.side.setChecked(True)
+        self.side.toggled.connect(self._edited)
+        prod.addWidget(self.side)
+        prod.addWidget(self.combined)
+        prod.addStretch(1)
+        root.addLayout(prod)
+        self.list_box = QVBoxLayout()
+        self.list_box.setSpacing(0)
+        holder = QWidget()
+        holder.setLayout(self.list_box)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(holder)
+        root.addWidget(scroll, 1)
+        self._build()
+
+    def _build(self):
+        while self.list_box.count():
+            item = self.list_box.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.rows = {}
+        order = self.cfg["order"]
+        for i, sid in enumerate(order):
+            name, opts = export_sections.SECTIONS[sid]
+            box = QFrame()
+            box.setObjectName("tile")
+            v = QVBoxLayout(box)
+            v.setContentsMargins(10, 6, 10, 8)
+            v.setSpacing(4)
+            head = QHBoxLayout()
+            for text, step, enabled in (("↑", -1, i > 0), ("↓", 1, i < len(order) - 1)):
+                b = QToolButton()
+                b.setText(text)
+                b.setEnabled(enabled)
+                b.setToolTip("Move up" if step < 0 else "Move down")
+                b.setFixedSize(26, 24)
+                b.setStyleSheet("QToolButton { padding:0; font-size:12px; }")
+                b.clicked.connect(lambda _, s=sid, st=step: self._move(s, st))
+                head.addWidget(b)
+            on = QCheckBox(name)
+            on.setStyleSheet("font-weight:bold; font-size:13px; color:#1A1A18;")
+            on.setChecked(bool(self.cfg["on"].get(sid)))
+            on.toggled.connect(self._edited)
+            head.addWidget(on, 1)
+            v.addLayout(head)
+            boxes = {}
+            if opts:
+                grid = QGridLayout()
+                grid.setContentsMargins(58, 0, 0, 0)
+                grid.setHorizontalSpacing(14)
+                grid.setVerticalSpacing(2)
+                for k, (key, label, _) in enumerate(opts):
+                    c = QCheckBox(label)
+                    c.setChecked(bool(self.cfg["opts"].get(sid, {}).get(key)))
+                    c.toggled.connect(self._edited)
+                    boxes[key] = c
+                    grid.addWidget(c, k // 3, k % 3)
+                grid.setColumnStretch(3, 1)
+                v.addLayout(grid)
+            if sid == "changelog":
+                note = _small_label("The latest change log made in the 📝 Change Log tab.", MUTED)
+                note.setContentsMargins(58, 0, 0, 0)
+                v.addWidget(note)
+            self.rows[sid] = (on, boxes)
+            self.list_box.addWidget(box)
+        self.list_box.addStretch(1)
+
+    def load(self, cfg):
+        self._loading = True
+        self.cfg = export_sections.normalized(cfg)
+        for name, b in self.prod_boxes.items():
+            b.setChecked(self.cfg["products"].get(name, True))
+        (self.side if self.cfg["split"] else self.combined).setChecked(True)
+        self._build()
+        self._loading = False
+
+    def config(self):
+        cfg = export_sections.normalized(self.cfg)
+        cfg["products"] = {n: b.isChecked() for n, b in self.prod_boxes.items()}
+        cfg["split"] = self.side.isChecked()
+        for sid, (on, boxes) in self.rows.items():
+            cfg["on"][sid] = on.isChecked()
+            cfg["opts"][sid] = {k: c.isChecked() for k, c in boxes.items()}
+        return cfg
+
+    def _edited(self, *_):
+        if self._loading:
+            return
+        self.cfg = self.config()
+        self.changed.emit()
+
+    def _move(self, sid, step):
+        self.cfg = self.config()
+        order = self.cfg["order"]
+        i = order.index(sid)
+        j = i + step
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+            self._build()
+            self.changed.emit()
+
+
 class ExportDialog(QDialog):
     """Pick the dates, the page style, and which cards and charts go in; saves a PNG
     (or one per card) and a matching PDF. A preview updates as you change things."""
@@ -2371,9 +2502,9 @@ class ExportDialog(QDialog):
         self.picks = dict(saved.get("picks") or {})       # only choices that differ from the layouts
         self.layouts = {t["title"]: win.layout_of(t) for t in win.data["tabs"]}
 
-        intro = QLabel("Saves the dashboard's cards for the dates you pick: a <b>PNG</b> for Slack "
-                       "or email and a matching <b>PDF</b> where run names, bug keys and notes are "
-                       "clickable. Tick what to include, and arrange the page your way.")
+        intro = QLabel("Saves a snapshot for the dates you pick: a <b>PNG</b> for Slack or email and a "
+                       "matching <b>PDF</b> where runs, bug keys and notes are clickable. Pick the sections "
+                       "and products, or switch Content to Cards for any dashboard card.")
         intro.setWordWrap(True)
         self.preset = QComboBox()
         self.preset.addItems([p for p in DATE_PRESETS])
@@ -2457,7 +2588,16 @@ class ExportDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(10)
         form.addRow("Profile", prof_row)
+        self.content = QComboBox()
+        self.content.addItem("Sections (simple)", "sections")
+        self.content.addItem("Cards (advanced)", "cards")
+        self.content.setToolTip("Sections: pick End-to-End Runs, Error Analysis, New Bugs… with a few options.\n"
+                                "Cards: pick any dashboard card and chart, from MAIN or a view.")
+        self.content.setCurrentIndex(max(self.content.findData(saved.get("content", "sections")), 0))
+        self.content.currentIndexChanged.connect(self._content_changed)
+        form.addRow("Content", self.content)
         form.addRow("View", self.view_box)
+        self.view_row_label = form.labelForField(self.view_box)
         form.addRow("Dates", dates)
         form.addRow("Layout", self.style)
         form.addRow("Save to", where)
@@ -2479,6 +2619,10 @@ class ExportDialog(QDialog):
         self.arrange.changed.connect(lambda: self.preview_timer.start(300))
         self.arrange.changed.connect(self._profile_state)
         self.side_tabs = QTabWidget()
+        self.sections = SectionsPanel(export_sections.product_names(win.data))
+        self.sections.load(saved.get("sections") or export_sections.default_config())
+        self.sections.changed.connect(self._update)
+        self.side_tabs.addTab(self.sections, "Sections")
         self.side_tabs.addTab(include, "What to include")
         self.side_tabs.addTab(self.arrange, "Arrange the page")
         left.addWidget(self.side_tabs, 1)
@@ -2512,6 +2656,7 @@ class ExportDialog(QDialog):
         root.addLayout(body, 1)
         root.addWidget(buttons)
         self.resize(1180, 800)
+        self._content_changed(reset=False)
         self._fill_profiles(saved.get("profile", self.DEFAULT_PROFILE))   # last used, as you left it
         self._update()
 
@@ -2527,10 +2672,25 @@ class ExportDialog(QDialog):
 
     def _default_settings(self):
         return {"preset": "Today", "style": "wide", "picks": {}, "arrangement": None,
-                "folder": self.folder, "view": views.MAIN}
+                "folder": self.folder, "view": views.MAIN, "content": "sections",
+                "sections": export_sections.default_config()}
+
+    def _content_changed(self, *_, reset=True):
+        simple = self.content.currentData() == "sections"
+        self.side_tabs.setTabEnabled(0, simple)
+        self.side_tabs.setTabEnabled(1, not simple)
+        if self.side_tabs.currentIndex() in (0, 1):
+            self.side_tabs.setCurrentIndex(0 if simple else 1)
+        self.view_box.setEnabled(not simple)
+        self.view_box.setToolTip("" if not simple else "Views apply to Cards (advanced)")
+        if reset and self.arrange.custom:
+            self.arrange.custom = False               # a different set of cards: arrange afresh
+        if reset:
+            self._update()
 
     def current_settings(self):
         return {"preset": self.preset.currentText(), "style": self.style.currentData(),
+                "content": self.content.currentData(), "sections": self.sections.config(),
                 "view": self.view_box.currentData(),
                 "picks": dict(self.picks), "folder": self.folder,
                 "arrangement": self.arrange.arrangement() if self.arrange.custom else None}
@@ -2561,6 +2721,12 @@ class ExportDialog(QDialog):
         self.view_box.setCurrentIndex(max(self.view_box.findData(p.get("view") or views.MAIN), 0))
         self.view_box.blockSignals(False)
         self.style.setCurrentIndex(max(self.style.findData(p.get("style", "wide")), 0))
+        self.content.blockSignals(True)
+        self.content.setCurrentIndex(max(self.content.findData(p.get("content", "cards" if p.get("picks")
+                                                                         else "sections")), 0))
+        self.content.blockSignals(False)
+        self.sections.load(p.get("sections") or export_sections.default_config())
+        self._content_changed(reset=False)
         self.folder = p.get("folder") or self.folder
         self.picks = dict(p.get("picks") or {})
         self._fill_tree()
@@ -2574,7 +2740,7 @@ class ExportDialog(QDialog):
         self._update()
 
     def _same(self, a, b):
-        keys = ("preset", "style", "picks", "arrangement", "folder", "view")
+        keys = ("preset", "style", "picks", "arrangement", "folder", "view", "content", "sections")
         norm = lambda s: json.dumps({k: (s or {}).get(k) for k in keys}, sort_keys=True)
         return norm(a) == norm(b)
 
@@ -2770,9 +2936,11 @@ class ExportDialog(QDialog):
 
     def snapshot(self):
         arrangement = self.arrange.arrangement() if self.arrange.custom else None
+        simple = self.content.currentData() == "sections"
         return export_report.Snapshot(self.win.data, self.rng(), self.label(), _settings(self.win),
                                       layouts=self.layouts, picks=self.picks, style=self.style.currentData(),
-                                      arrangement=arrangement, entries=self.view_entries())
+                                      arrangement=arrangement, entries=None if simple else self.view_entries(),
+                                      sections=self.sections.config() if simple else None)
 
     def _update(self, *_):
         name = self.preset.currentText()
@@ -2812,7 +2980,7 @@ class ExportDialog(QDialog):
                 self.arrange.sync(titles)
             elif snap.arrangement:
                 self.arrange.load(snap.arrangement, titles)
-        self.side_tabs.setTabEnabled(1, self.style.currentData() in ("wide", "slack"))
+        self.side_tabs.setTabEnabled(2, self.style.currentData() in ("wide", "slack"))
         if not snap.cards:
             self.preview.setPixmap(QPixmap())
             self.preview.setText("Nothing ticked to export.")
