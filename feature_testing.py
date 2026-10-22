@@ -373,6 +373,71 @@ def sessions_in(testing, rng):
     return out
 
 
+# ── instruments ───────────────────────────────────────────────────────────────
+
+PROTO_RE = re.compile(r"^(proto|vkg|viking)[-\s]?\d+$", re.I)
+
+def _inst_key(name):
+    return re.sub(r"\s+", "", (name or "").lower())
+
+def _inst_label(spellings):
+    """PROTO-0028 for any spelling of a proto; else the most used spelling (Cherry, LOKI)."""
+    best = max(spellings, key=spellings.get)
+    if PROTO_RE.match(best.strip()):
+        head, num = re.match(r"^([A-Za-z]+)[-\s]?(\d+)$", best.strip()).groups()
+        return f"{head.upper()}-{num}"
+    return best.strip()
+
+def instruments(testing, rng, keep=lambda e: True):
+    """The state of each instrument (a session's Test System): open Hardware Support Requests
+    on it (any date — they're open now), and its last session. Lists instruments with an open
+    request, or with a session in rng. A request names its instrument at the start of its
+    title ("Proto-0024 - …") when it can; otherwise it's the session's instrument.
+    [{name, open: [{key, summary, status, effort, ticket, n, date}], last: (effort, session) or None,
+      in_range: sessions in rng}] — instruments with open requests first."""
+    info = (testing or {}).get("support") or {}
+    lo, hi = (rng[0].isoformat(), rng[1].isoformat()) if rng else ("", "9999")
+    spell, last, count, requests = {}, {}, {}, {}
+    for e in efforts(testing):
+        if not keep(e):
+            continue
+        for s in e["sessions"]:
+            k = _inst_key(s["system"])
+            if not k:
+                continue
+            spell.setdefault(k, {}).setdefault(s["system"].strip(), 0)
+            spell[k][s["system"].strip()] += 1
+            if s["date"] and (k not in last or (s["date"], s["n"]) >= (last[k][1]["date"], last[k][1]["n"])):
+                last[k] = (e, s)
+            if s["date"] and lo <= s["date"] <= hi:
+                count[k] = count.get(k, 0) + 1
+            for x in s.get("support", []):
+                if x not in requests or (s["date"] or "") < (requests[x][2]["date"] or ""):
+                    requests[x] = (k, e, s)              # where it was first logged
+    known = set(spell)
+    open_by = {}
+    for x, (k, e, s) in requests.items():
+        t = info.get(x) or {}
+        if t.get("status_category") == "done":
+            continue
+        head = (t.get("summary") or "").split(" - ")[0].strip()
+        hk = _inst_key(head)
+        if head and (hk in known or PROTO_RE.match(head)):     # the title names the instrument
+            k = hk
+            spell.setdefault(k, {}).setdefault(head, 0)
+        open_by.setdefault(k, []).append({"key": x, "summary": t.get("summary") or "", "status": t.get("status") or "",
+                                          "effort": e["name"], "product": e["product"], "ticket": s["ticket"],
+                                          "n": s["n"], "date": s["date"]})
+    out = []
+    for k in spell:
+        if k in open_by or count.get(k):
+            out.append({"name": _inst_label(spell[k]), "open": sorted(open_by.get(k, []), key=lambda r: r["date"] or ""),
+                        "last": last.get(k), "in_range": count.get(k, 0)})
+    out.sort(key=lambda i: (not i["open"], -(int((i["last"][1]["date"] or "0").replace("-", "")) if i["last"] else 0),
+                            i["name"].lower()))
+    return out
+
+
 # ── stored in the sheet (hidden tab) ──────────────────────────────────────────
 
 def to_rows(snap):

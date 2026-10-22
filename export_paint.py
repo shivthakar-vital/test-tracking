@@ -763,6 +763,23 @@ class Painter(es.Renderer):
                           "warn" if hw_open else "ink"),
                          ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width))
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
+        insts = ft.instruments(testing, ctx.rng, keep) if self.opt("testing", "instruments") else []
+        if insts:
+            rows = []
+            for inst in insts:
+                name = f"<b>{html.escape(inst['name'])}</b>"
+                if inst["last"]:
+                    e, s = inst["last"]
+                    last = f"last tested {date.fromisoformat(s['date']):%a %b %-d} · {e['name']} S{s['n']}"
+                else:
+                    last = "no sessions logged on it"
+                for r in inst["open"]:
+                    rows.append(dict(link_html=name, tag="HW Support Requested",
+                                     text=f"{r['key']}  {r['summary']}", note=f"from {r['effort']} · {r['ticket']} S{r['n']}",
+                                     right=r["status"] or "Open", right_color="warn"))
+                if not inst["open"]:
+                    rows.append(dict(link_html=name, tag="No open requests", text=last, right=""))
+            body.append(vstack([k.label("Instruments", width), k.table(rows, width)], 6))
         if self.opt("testing", "sessions"):
             if shown:
                 rows = []

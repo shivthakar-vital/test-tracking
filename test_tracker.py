@@ -49,7 +49,7 @@ import ui_theme
 import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "2.3.3"         # bump this for each release, then push a matching tag (v2.3.3)
+APP_VERSION = "2.3.4"         # bump this for each release, then push a matching tag (v2.3.4)
 APP_CHANNEL = "stable"        # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
@@ -4011,6 +4011,34 @@ class FeatureTestingPage(QWidget):
 
     # ── drawing ───────────────────────────────────────────────────────────────
 
+    def _instrument(self, inst, today):
+        """One instrument: HARDWARE SUPPORT REQUESTED with its open tickets, or no open requests;
+        and when it was last tested."""
+        box = QFrame()
+        box.setObjectName("tile")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(14, 8, 14, 10)
+        bl.setSpacing(3)
+        if inst["last"]:
+            e, s = inst["last"]
+            d = date.fromisoformat(s["date"])
+            ago = (today - d).days
+            when = "today" if ago == 0 else "yesterday" if ago == 1 else f"{d:%b %-d}"
+            last = (f'last tested {when} · {html.escape(e["name"])} '
+                    f'{self._jira(s["ticket"], "S" + str(s["n"]))}')
+        else:
+            last = "no sessions logged on it"
+        state = (self._pill("HARDWARE SUPPORT REQUESTED", "#FFF6E5", "#854F0B") if inst["open"]
+                 else self._pill("No open requests", "#E3F4E1", "#0B7A0B"))
+        bl.addWidget(self._rich(f'<b style="font-size:14px">{html.escape(inst["name"])}</b>&nbsp; {state}'
+                                f'&nbsp; <span style="color:#8A8984">{last}</span>', 13))
+        for r in inst["open"]:
+            bl.addWidget(self._rich(
+                f'{self._pill(r["status"] or "Open")}&nbsp; {self._jira(r["key"])} {html.escape(r["summary"])}'
+                f'<span style="color:#8A8984"> · from {html.escape(r["effort"])} '
+                f'{self._jira(r["ticket"], r["ticket"] + " S" + str(r["n"]))}</span>', 12))
+        return box
+
     def refresh(self, *_):
         data = self.win.data or {}
         testing = data.get("testing")
@@ -4084,6 +4112,13 @@ class FeatureTestingPage(QWidget):
                 ("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else INK)):
             tiles.addWidget(blocks._tile_widget(label, value, color, sub, None), 1)
         v.addLayout(tiles)
+        insts = feature_testing.instruments(testing, rng, lambda e: not product or e["product"] == product)
+        if insts:
+            lbl = QLabel("Instruments")
+            lbl.setStyleSheet("font-size:13px; font-weight:bold; color:#52514E; padding-top:8px;")
+            v.addWidget(lbl)
+            for inst in insts:
+                v.addWidget(self._instrument(inst, today))
         root.addWidget(card)
 
         # What We Tested, by day
