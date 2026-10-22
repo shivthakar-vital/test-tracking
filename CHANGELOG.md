@@ -8,6 +8,7 @@
   - Change Log: **Category Counts**, **In QA**
 
   A section with all its boxes unticked is left out of the export. Saved profiles keep their choices; the new boxes start ticked.
+- **Fix: syncing could stop for good.** If the Mac slept or changed networks during a sync, the request to Google could wait forever, and the app skipped every sync after it. Sheet requests now give up after a time limit, and the next sync tries again.
 
 ## 2.3.2
 - **🧪 Feature Testing** is redesigned in sections like the dashboard: **Overview**, **What We Tested** (grouped by day), **Tested in These Dates**, and **Not Tested in These Dates** (active efforts with no session in the dates — including new tickets with no sessions logged yet, marked **New**).

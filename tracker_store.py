@@ -619,6 +619,7 @@ class SheetSource:
         import gspread
         self.url = url
         self.gc = gspread.service_account(filename=creds_path)
+        self.gc.set_timeout((15, 90))     # connect, read — a dropped connection (sleep, Wi-Fi change) can't hang a sync
         self.book = self.gc.open_by_url(url)
 
     # ── reading ───────────────────────────────────────────────────────────────
