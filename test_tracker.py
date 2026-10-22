@@ -4012,8 +4012,7 @@ class FeatureTestingPage(QWidget):
     # ── drawing ───────────────────────────────────────────────────────────────
 
     def _instrument(self, inst, today):
-        """One instrument: HARDWARE SUPPORT REQUESTED with its open tickets, or no open requests;
-        and when it was last tested."""
+        """One instrument: HARDWARE SUPPORT REQUESTED with its open tickets, and when it was last tested."""
         box = QFrame()
         box.setObjectName("tile")
         bl = QVBoxLayout(box)
@@ -4028,8 +4027,7 @@ class FeatureTestingPage(QWidget):
                     f'{self._jira(s["ticket"], "S" + str(s["n"]))}')
         else:
             last = "no sessions logged on it"
-        state = (self._pill("HARDWARE SUPPORT REQUESTED", "#FFF6E5", "#854F0B") if inst["open"]
-                 else self._pill("No open requests", "#E3F4E1", "#0B7A0B"))
+        state = self._pill("HARDWARE SUPPORT REQUESTED", "#FFF6E5", "#854F0B")
         bl.addWidget(self._rich(f'<b style="font-size:14px">{html.escape(inst["name"])}</b>&nbsp; {state}'
                                 f'&nbsp; <span style="color:#8A8984">{last}</span>', 13))
         for r in inst["open"]:
@@ -4112,7 +4110,8 @@ class FeatureTestingPage(QWidget):
                 ("No session in 7+ days", len(stale), "active efforts", "#B26B00" if stale else INK)):
             tiles.addWidget(blocks._tile_widget(label, value, color, sub, None), 1)
         v.addLayout(tiles)
-        insts = feature_testing.instruments(testing, rng, lambda e: not product or e["product"] == product)
+        insts = [i for i in feature_testing.instruments(testing, rng, lambda e: not product or e["product"] == product)
+                 if i["open"]]                  # only instruments waiting on hardware support
         if insts:
             lbl = QLabel("Instruments")
             lbl.setStyleSheet("font-size:13px; font-weight:bold; color:#52514E; padding-top:8px;")

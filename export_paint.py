@@ -763,7 +763,8 @@ class Painter(es.Renderer):
                           "warn" if hw_open else "ink"),
                          ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width))
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
-        insts = ft.instruments(testing, ctx.rng, keep) if self.opt("testing", "instruments") else []
+        insts = [i for i in ft.instruments(testing, ctx.rng, keep) if i["open"]] \
+            if self.opt("testing", "instruments") else []
         if insts:
             rows = []
             for inst in insts:
@@ -771,12 +772,9 @@ class Painter(es.Renderer):
                 last_d = (f"last tested {date.fromisoformat(inst['last'][1]['date']):%b %-d}" if inst["last"]
                           else "not tested")
                 n = len(inst["open"])
-                if n:
-                    rows.append(dict(link_html=name, tag="HW Support Requested",
-                                     text=f"{n} open support request{'s' if n != 1 else ''}",
-                                     note=", ".join(r["key"] for r in inst["open"]), right=last_d, right_color="ink2"))
-                else:
-                    rows.append(dict(link_html=name, tag="No open requests", text="", right=last_d, right_color="ink2"))
+                rows.append(dict(link_html=name, tag="HW Support Requested",
+                                 text=f"{n} open support request{'s' if n != 1 else ''}",
+                                 note=", ".join(r["key"] for r in inst["open"]), right=last_d, right_color="ink2"))
             body.append(vstack([k.label("Instruments", width), k.table(rows, width)], 6))
         if self.opt("testing", "sessions"):
             if shown:

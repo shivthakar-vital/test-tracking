@@ -1,7 +1,7 @@
 # What's new
 
 ## 2.3.4
-- **Instruments** in Feature Testing's Overview: the state of each test instrument (a session's Test System — PROTO-0028, Cherry…). An instrument with an open Hardware Support Request (V1P / VKG) is marked **HARDWARE SUPPORT REQUESTED**, with each open ticket's status and title and the test ticket and session it came from. Others show **No open requests** and when they were last tested. Open requests count whatever their date; other instruments are listed when they were used in the chosen dates. A request whose title starts with an instrument ("Proto-0024 - …") counts for that instrument; otherwise for the session's. Spellings like proto-0028 / PROTO-0028 are one instrument. Also in the export (one row per instrument, with how many support requests are open), with its own checkbox.
+- **Instruments** in Feature Testing's Overview: each test instrument (a session's Test System — PROTO-0028, Cherry…) with an open Hardware Support Request (V1P / VKG) is marked **HARDWARE SUPPORT REQUESTED**, with each open ticket's status and title, the test ticket and session it came from, and when the instrument was last tested. Instruments with no open requests aren't listed. A request whose title starts with an instrument ("Proto-0024 - …") counts for that instrument; otherwise for the session's. Spellings like proto-0028 / PROTO-0028 are one instrument. Also in the export — one row per instrument with how many requests are open — with its own checkbox.
 
 ## 2.3.3
 - **A checkbox for every part of the export.** New ones:
