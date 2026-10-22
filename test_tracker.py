@@ -4006,12 +4006,15 @@ class FeatureTestingPage(QWidget):
         if href.startswith("kind:"):                  # kind:<ticket>#<session>:<bug>:<new kind>
             ref, _, kind = href[5:].rpartition(":")
             self.win.set_bug_kind(ref, kind)
+        elif href.startswith("inst:"):                # inst:<instrument>:hide / :show
+            key, _, act = href[5:].rpartition(":")
+            self.win.set_instrument_hidden(key, act == "hide")
         else:
             _open_link(href)
 
     # ── drawing ───────────────────────────────────────────────────────────────
 
-    def _instrument(self, inst, today):
+    def _instrument(self, inst, today, admin=False):
         """One instrument: HARDWARE SUPPORT REQUESTED with its open tickets, and when it was last tested."""
         box = QFrame()
         box.setObjectName("tile")
@@ -4028,8 +4031,10 @@ class FeatureTestingPage(QWidget):
         else:
             last = "no sessions logged on it"
         state = self._pill("HARDWARE SUPPORT REQUESTED", "#FFF6E5", "#854F0B")
+        hide = (f'&nbsp; <a href="inst:{html.escape(inst["key"])}:hide" style="color:#8A8984; font-size:11px">'
+                f'hide</a>') if admin else ""
         bl.addWidget(self._rich(f'<b style="font-size:14px">{html.escape(inst["name"])}</b>&nbsp; {state}'
-                                f'&nbsp; <span style="color:#8A8984">{last}</span>', 13))
+                                f'&nbsp; <span style="color:#8A8984">{last}</span>{hide}', 13))
         for r in inst["open"]:
             bl.addWidget(self._rich(
                 f'{self._pill(r["status"] or "Open")}&nbsp; {self._jira(r["key"])} {html.escape(r["summary"])}'
@@ -4112,12 +4117,19 @@ class FeatureTestingPage(QWidget):
         v.addLayout(tiles)
         insts = [i for i in feature_testing.instruments(testing, rng, lambda e: not product or e["product"] == product)
                  if i["open"]]                  # only instruments waiting on hardware support
-        if insts:
+        hidden_keys = feature_testing.hidden_instruments(settings)
+        hidden = [i for i in insts if i["key"] in hidden_keys]
+        insts = [i for i in insts if i["key"] not in hidden_keys]
+        if insts or (hidden and admin):
             lbl = QLabel("Instruments")
             lbl.setStyleSheet("font-size:13px; font-weight:bold; color:#52514E; padding-top:8px;")
             v.addWidget(lbl)
             for inst in insts:
-                v.addWidget(self._instrument(inst, today))
+                v.addWidget(self._instrument(inst, today, admin))
+            if hidden and admin:                # only the admin sees what's hidden, to show it again
+                v.addWidget(self._rich("Hidden: " + ", ".join(
+                    f'{html.escape(i["name"])} <a href="inst:{html.escape(i["key"])}:show" style="color:#8A8984; '
+                    f'font-size:11px">show</a>' for i in hidden), 12, "#8A8984"))
         root.addWidget(card)
 
         # What We Tested, by day
@@ -5711,6 +5723,16 @@ class TrackerApp(QMainWindow):
         settings[feature_testing.BUG_KIND_PREFIX + ref] = kind
         self._save_settings(settings, f"Marked {ref.rpartition(':')[2]} as "
                             + ("a new bug." if kind == "new" else "seen again."))
+
+    def set_instrument_hidden(self, key, hide):
+        """Admin: hide an instrument from Feature Testing's Instruments (and the export) for everyone,
+        or show it again."""
+        unlocked = self._admin_unlock(self, "hiding instruments")
+        if not unlocked:
+            return
+        settings = dict(unlocked[0])
+        settings[feature_testing.HIDE_INST_PREFIX + key] = "1" if hide else ""
+        self._save_settings(settings, f"{'Hid' if hide else 'Showing'} {key.upper()} in Instruments.")
 
     def edit_testing_jql(self):
         unlocked = self._admin_unlock(self, "the feature-testing JQL")

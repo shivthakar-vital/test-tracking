@@ -763,7 +763,8 @@ class Painter(es.Renderer):
                           "warn" if hw_open else "ink"),
                          ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width))
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
-        insts = [i for i in ft.instruments(testing, ctx.rng, keep) if i["open"]] \
+        hidden = ft.hidden_instruments(self.data.get("settings"))
+        insts = [i for i in ft.instruments(testing, ctx.rng, keep) if i["open"] and i["key"] not in hidden] \
             if self.opt("testing", "instruments") else []
         if insts:
             rows = []

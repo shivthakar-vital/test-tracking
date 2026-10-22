@@ -35,6 +35,7 @@ DEFAULT_JQL = ('summary ~"[QA Testing]" AND (assignee=712020:b928dc8a-87ce-4da9-
                'status!="Closed (Won\'t Do)") AND type=Testing')
 SYNC_MINUTES = 10
 SUPPORT_PROJECTS = ("V1P", "VKG")       # JIRA projects of Hardware Support Requests (VitalOne, Viking)
+HIDE_INST_PREFIX = "testing_hide_instrument:"   # admin: "testing_hide_instrument:<instrument>" → "1" hides it
 BUG_KIND_PREFIX = "testing_bug:"        # admin corrections: "testing_bug:<ticket>#<session>:<bug>" → new / seen
 NEW_WORDS = re.compile(r"\b(bug\s*(ticket|tickt|tkt)?\s*(made|created|filed|logged|opened|raised)|created|made|filed|"
                        r"logged|opened|raised|new bug|new ticket|wrote up|reported)\b", re.I)
@@ -380,6 +381,10 @@ PROTO_RE = re.compile(r"^(proto|vkg|viking)[-\s]?\d+$", re.I)
 def _inst_key(name):
     return re.sub(r"\s+", "", (name or "").lower())
 
+def hidden_instruments(settings):
+    """Instrument keys the admin hid (saved in the sheet, for everyone)."""
+    return {k[len(HIDE_INST_PREFIX):] for k, v in (settings or {}).items() if k.startswith(HIDE_INST_PREFIX) and v}
+
 def _inst_label(spellings):
     """PROTO-0028 for any spelling of a proto; else the most used spelling (Cherry, LOKI)."""
     best = max(spellings, key=spellings.get)
@@ -431,7 +436,7 @@ def instruments(testing, rng, keep=lambda e: True):
     out = []
     for k in spell:
         if k in open_by or count.get(k):
-            out.append({"name": _inst_label(spell[k]), "open": sorted(open_by.get(k, []), key=lambda r: r["date"] or ""),
+            out.append({"key": k, "name": _inst_label(spell[k]), "open": sorted(open_by.get(k, []), key=lambda r: r["date"] or ""),
                         "last": last.get(k), "in_range": count.get(k, 0)})
     out.sort(key=lambda i: (not i["open"], -(int((i["last"][1]["date"] or "0").replace("-", "")) if i["last"] else 0),
                             i["name"].lower()))
