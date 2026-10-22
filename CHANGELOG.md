@@ -8,6 +8,7 @@
   - Change Log: **Category Counts**, **In QA**
 
   A section with all its boxes unticked is left out of the export. Saved profiles keep their choices; the new boxes start ticked.
+- **JIRA sync dot** in the status bar, beside Google Sheets: green **synced HH:MM**, amber while syncing or when the data is over 30 minutes old, red if the last sync failed (the reason in its tooltip). Everyone sees when Feature Testing was last synced; in the admin's app, click it to sync now.
 - **Fix: syncing could stop for good.** If the Mac slept or changed networks during a sync, the request to Google could wait forever, and the app skipped every sync after it. Sheet requests now give up after a time limit, and the next sync tries again.
 
 ## 2.3.2

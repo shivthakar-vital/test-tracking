@@ -4691,6 +4691,9 @@ class TrackerApp(QMainWindow):
         status_row = QHBoxLayout()
         self.status_lbl = _small_label("Ready.", MUTED)
         self.conn_lbl = _small_label("")
+        self.jira_lbl = _small_label("")
+        self.jira_lbl.mousePressEvent = lambda e: (self.sync_testing(force=True)
+                                                   if changelog.has_credentials() else None)
         self.update_btn = QPushButton()
         self.update_btn.setObjectName("update")
         self.update_btn.hide()
@@ -4699,6 +4702,8 @@ class TrackerApp(QMainWindow):
         status_row.addWidget(self.update_btn)
         status_row.addSpacing(10)
         status_row.addWidget(self.conn_lbl)
+        status_row.addSpacing(10)
+        status_row.addWidget(self.jira_lbl)
         version_btn = QPushButton(f"v{APP_VERSION}" + (" testing" if APP_CHANNEL == "testing" else ""))
         version_btn.setObjectName("link")
         version_btn.setStyleSheet(f"color:{MUTED}; font-size:11px; margin-left:6px;")
@@ -4730,6 +4735,41 @@ class TrackerApp(QMainWindow):
         self.conn_lbl.setToolTip(detail)
         for page in self.pages.values():
             page._update_buttons()
+
+    def _set_jira(self, state=None, detail=""):
+        """The JIRA dot beside the Google Sheets one: when Feature Testing was last synced from
+        JIRA (saved in the sheet, so everyone sees it), or syncing / failed in the admin's app."""
+        if state is None:
+            state = "syncing" if getattr(self, "_testing_busy", False) else getattr(self, "_jira_state", "ok")
+        self._jira_state = state if state in ("failed",) else "ok"
+        synced = ((self.data or {}).get("testing") or {}).get("synced") or ""
+        try:
+            when = datetime.fromisoformat(synced)
+        except ValueError:
+            when = None
+        if when is None:
+            stamp = ""
+        elif when.date() == date.today():
+            stamp = f"{when:%H:%M}"
+        else:
+            stamp = f"{when:%b %-d %H:%M}"
+        stale = when is None or (datetime.now() - when).total_seconds() > 3 * feature_testing.SYNC_MINUTES * 60
+        if state == "syncing":
+            text, color = "● JIRA · syncing…", AMBER
+        elif state == "failed":
+            text, color = "● JIRA sync failed" + (f" · last {stamp}" if stamp else ""), RED
+        elif when is None:
+            text, color = "● JIRA · not synced yet", MUTED
+        else:
+            text, color = f"● JIRA · synced {stamp}", AMBER if stale else GREEN
+        mine = changelog.has_credentials()
+        tip = detail or ("Feature Testing, from JIRA's Testing tickets. " +
+                         ("Synced by your app every few minutes — click to sync now." if mine
+                          else "Synced by the admin's app every few minutes."))
+        self.jira_lbl.setText(text)
+        self.jira_lbl.setStyleSheet(f"color:{color}; font-size:11px;")
+        self.jira_lbl.setToolTip(tip)
+        self.jira_lbl.setCursor(Qt.PointingHandCursor if mine else Qt.ArrowCursor)
 
     def _fill_releases(self):
         self.release.blockSignals(True)
@@ -4919,6 +4959,7 @@ class TrackerApp(QMainWindow):
         self.view_bar.refresh()                   # shared views may have changed in the sheet
         self.changelog_page.refresh()
         self.testing_page.refresh()
+        self._set_jira()
         QTimer.singleShot(1500, self.sync_testing)      # keep the JIRA testing data fresh (admin's app)
         self.setWindowTitle(f"{APP_TITLE} — {data['title']}")
         titles = [t["title"] for t in data["tabs"]]
@@ -5600,6 +5641,7 @@ class TrackerApp(QMainWindow):
         if not force and time.time() - getattr(self, "_testing_at", 0) < feature_testing.SYNC_MINUTES * 60:
             return
         self._testing_busy, self._testing_at = True, time.time()
+        self._set_jira("syncing")
         query, src = feature_testing.jql(_settings(self)), self.source
 
         def work():
@@ -5612,11 +5654,13 @@ class TrackerApp(QMainWindow):
             self.data["testing"] = snap
             store.save_cache(self.url, self.data)
             self.testing_page.refresh()
+            self._set_jira("ok")
             if force:
                 self._set_status(f"Synced {len(snap['tickets'])} Testing tickets from JIRA.")
 
         def failed(exc):
             self._testing_busy = False
+            self._set_jira("failed", f"Couldn't sync from JIRA: {exc}")
             if force:
                 QMessageBox.warning(self, "Couldn't sync from JIRA", str(exc))
             else:
