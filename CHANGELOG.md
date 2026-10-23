@@ -1,5 +1,8 @@
 # What's new
 
+## 2.3.5
+- **Fix: Failed Runs in the export said "same day" for a continued error.** A run that continues an earlier one ("Continued from Run#") is now timed from the first run of that error, and counts as fixed only once every failed run in it is resolved — e.g. runs #63 and #64, continuing #20 (Oct 2) and resolved Oct 23, show **fixed in 21 days** and **continued from #20**.
+
 ## 2.3.4
 - **Instruments** in Feature Testing's Overview: each test instrument (a session's Test System — PROTO-0028, Cherry…) with an open Hardware Support Request (V1P / VKG) is marked **HARDWARE SUPPORT REQUESTED**, with each open ticket's status and title, the test ticket and session it came from, and when the instrument was last tested. Instruments with no open requests aren't listed. A request whose title starts with an instrument ("Proto-0024 - …") counts for that instrument; otherwise for the session's. Spellings like proto-0028 / PROTO-0028 are one instrument. Also in the export — one row per instrument with how many requests are open — with its own checkbox. The admin can **hide** an instrument (e.g. one you don't use) for everyone; hidden ones are listed at the bottom for the admin, with **show** to bring them back.
 

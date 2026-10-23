@@ -279,6 +279,24 @@ def issue_groups(tab, rows=None):
     when = lambda r: (parse_date(r["values"][dcol["pos"]]) if dcol else None) or date.min
     return {k: sorted(v, key=when) for k, v in groups.items()}
 
+def run_issue(tab, row, groups=None, as_of=None):
+    """A failed run as part of its issue (its "Continued from" chain):
+    (first run date, resolved date or None, root run key or None if it's its own issue).
+    The issue started at the chain's first run, and is resolved only once every failed run
+    in it has a Resolved date (the latest one) on or before `as_of`."""
+    import charts
+    groups = groups if groups is not None else issue_groups(tab)
+    res, dcol = resolved_column(tab), date_column(tab)
+    key = _run_key(tab, row)
+    root, chain = next(((k, ch) for k, ch in groups.items() if any(x is row for x in ch)), (key, [row]))
+    ran = parse_date(chain[0]["values"][dcol["pos"]]) if dcol else None
+    failed = [x for x in chain if charts.classify(row_status(tab, x)) in FAILED] or [row]
+    fixes = [parse_date(x["values"][res["pos"]]) for x in failed] if res else [None]
+    fixed = max(fixes) if all(fixes) else None
+    if fixed and as_of and fixed > as_of:
+        fixed = None
+    return ran, fixed, (root if root != key and len(chain) > 1 else None)
+
 def merge_issue(tab, rows, prefer=()):
     """One row standing for a chain of runs (`rows`, oldest first). Each cell comes from
     the newest run that has it filled in, since a later run usually has the better

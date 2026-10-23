@@ -225,11 +225,13 @@ class Renderer:
             notes = next((c for c in t["columns"] if store._words(c["name"]) & {"note", "notes"}), None)
             res, d = store.resolved_column(t), store.date_column(t)
             run_col = store.run_name_column(t)
+            groups = store.issue_groups(t)
             for r in ctx.rows(t):
                 if charts.classify(store.row_status(t, r)) not in store.FAILED:
                     continue
-                ran = store.parse_date(r["values"][d["pos"]]) if d else None
-                fixed = store.parse_date(r["values"][res["pos"]]) if res else None
+                # a run continuing an earlier one is that issue: dated from its first run, fixed when all are
+                ran, fixed, root = store.run_issue(t, r, groups, as_of=min(ctx.rng[1], date.today()) if ctx.rng
+                                                   else date.today())
                 as_of = min(ctx.rng[1], date.today()) if ctx.rng else date.today()
                 if fixed and ran:
                     days = (fixed - ran).days
@@ -239,6 +241,8 @@ class Renderer:
                 else:
                     state = "open", MUTED
                 bits = [r["values"][c["pos"]].strip() for c in (reason, fault) if c and r["values"][c["pos"]].strip()]
+                if root:
+                    bits.append(f"continued from #{root}")
                 note = r["values"][notes["pos"]].strip() if notes else ""
                 if len(note) > 90:
                     note = note[:88].rstrip() + "…"

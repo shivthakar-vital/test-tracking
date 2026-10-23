@@ -515,11 +515,13 @@ class Painter(es.Renderer):
             res, d = store.resolved_column(t), store.date_column(t)
             run_col = store.run_name_column(t)
             as_of = min(ctx.rng[1], date.today()) if ctx.rng else date.today()
+            groups = store.issue_groups(t)
             for r in ctx.rows(t):
                 if charts.classify(store.row_status(t, r)) not in store.FAILED:
                     continue
-                ran = store.parse_date(r["values"][d["pos"]]) if d else None
-                fixed = store.parse_date(r["values"][res["pos"]]) if res else None
+                # a run continuing an earlier one is that issue: dated from its first run, fixed when all are
+                ran, fixed, root = store.run_issue(t, r, groups, as_of=min(ctx.rng[1], date.today()) if ctx.rng
+                                                   else date.today())
                 if fixed and ran:
                     days = (fixed - ran).days
                     right, rc = ("same day" if days <= 0 else f"fixed in {es._plural(days, 'day')}"), "good"
@@ -528,6 +530,8 @@ class Painter(es.Renderer):
                 else:
                     right, rc = "open", "muted"
                 bits = [r["values"][c["pos"]].strip() for c in (reason, fault) if c and r["values"][c["pos"]].strip()]
+                if root:
+                    bits.append(f"continued from #{root}")
                 num = r["values"][t["columns"][0]["pos"]].strip().lstrip("#")
                 link = r["links"][run_col["pos"]] if run_col else ""
                 items.append((ran or date.min, dict(link_html=self.link(f"#{num}" if num else "run", link), tag=name,
