@@ -658,6 +658,11 @@ class Painter(es.Renderer):
             new_open = [r for r in bugs.new if not done(r)]
             sub = f"{len(bugs.new)} new · {len(new_open)} still open · {len(bugs.closed)} closed"
             items = [k.product(name or "All products", sub, w)]
+            if self.opt("bugs", "allstatus"):
+                slices, _, _ = self.status_slices([tab], ctx.rows)
+                if slices:
+                    items.append(vstack([k.label("All Bugs By Status", w),
+                                         k.donut(slices, self.done_pct(slices), "done", w)], 8))
             if self.opt("bugs", "open"):
                 items.append(self._bug_table(bugs, new_open, bugs.made, w, product_of if not name else None,
                                              f"No open new bugs in {ctx.range_text}."))
@@ -665,11 +670,6 @@ class Painter(es.Renderer):
                 items.append(k.label("Closed", w))
                 items.append(self._bug_table(bugs, bugs.closed, bugs.done_col, w, product_of if not name else None,
                                              f"No bugs closed in {ctx.range_text}.", done=True))
-            if self.opt("bugs", "allstatus"):
-                slices, _, _ = self.status_slices([tab], ctx.rows)
-                if slices:
-                    items.append(vstack([k.label("All Bugs By Status", w),
-                                         k.donut(slices, self.done_pct(slices), "done", w)], 8))
             return vstack(items, 10)
 
         cols = [lambda w, n=n, c=c: column(n, c, w) for n, c in parts]
@@ -797,7 +797,10 @@ class Painter(es.Renderer):
                                      text="no hardware support requests", right=last_d, right_color="ink2"))
             body.append(vstack([k.label("Instruments", width), k.table(rows, width)], 6))
         if self.opt("testing", "sessions"):
-            if shown:
+            if shown and ctx.rng is None:          # all dates: a summary, one row per effort
+                body.append(vstack([k.label("What We Tested", width),
+                                    self._sessions_summary(shown, kind, jira, width)], 6))
+            elif shown:
                 rows = []
                 for e, s in shown:
                     day = date.fromisoformat(s["date"]).strftime("%a %b %-d")
@@ -855,6 +858,34 @@ class Painter(es.Renderer):
         if not body:
             return None
         return "Feature Testing", "from JIRA Testing tickets", vstack(body, 20)
+
+    def _sessions_summary(self, shown, kind, jira, width):
+        """Every session, summed up: a line for all of them, then each effort with its
+        number of sessions, dates, testers, new bugs and HW requests."""
+        k = self.k
+        plural = es._plural
+        span = lambda ss: " – ".join(dict.fromkeys(f"{date.fromisoformat(x['date']):%b %-d}"
+                                                    for x in (ss[-1], ss[0])))     # oldest – newest
+        groups = {}
+        for e, s in shown:                       # newest first, so efforts come most recent first
+            groups.setdefault(e["key"], (e, []))[1].append(s)
+        new = {b for _, s in shown for b in s["bugs"] if kind(s, b) == "new"}
+        hw = {x for _, s in shown for x in s.get("support", [])}
+        testers = {x for _, s in shown for x in s["testers"]}
+        line = " · ".join([f"{plural(len(shown), 'session')} across {plural(len(groups), 'effort')}",
+                           span([s for _, s in shown]), plural(len(testers), "tester"),
+                           plural(len(new), "new bug"), plural(len(hw), "HW request")])
+        rows = []
+        for e, ss in groups.values():
+            n_new = len({b for s in ss for b in s["bugs"] if kind(s, b) == "new"})
+            n_hw = len({x for s in ss for x in s.get("support", [])})
+            right = [plural(len(ss), "session")] + [x for x in (n_new and plural(n_new, "new bug"),
+                                                                n_hw and plural(n_hw, "HW request")) if x]
+            rows.append(dict(link_html=jira(e["key"], e["key"]), tag=e["product"], text=e["name"],
+                             note=" · ".join(x for x in (", ".join(dict.fromkeys(t for s in ss for t in s["testers"])),
+                                                         span(ss)) if x),
+                             right=" · ".join(right), right_color="warn" if n_hw else ("link" if n_new else "ink2")))
+        return vstack([k.text(line, width, 15, "ink2"), k.table(rows, width)], 10)
 
     def _effort_rows(self, rows, width):
         # like table(), but the key column is wider (PROD-1234)

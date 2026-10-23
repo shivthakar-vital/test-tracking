@@ -1,5 +1,9 @@
 # What's new
 
+## 2.3.7
+- **Export: All Bugs By Status** is now at the top of each product's New Bugs, above the list.
+- **Export: What We Tested with All dates** is a summary instead of every session: one line (sessions, efforts, dates, testers, new bugs, HW requests), then each test effort with its number of sessions, testers, dates, new bugs and HW requests. Other date ranges still list each session.
+
 ## 2.3.6
 - **Export: Instruments shows each instrument used in the dates.**
   - **Functional** (green): no hardware support request logged in these dates and none still open.
