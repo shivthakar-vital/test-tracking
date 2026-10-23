@@ -308,13 +308,19 @@ class Kit:
                 p.drawText(QRectF(x + width - cw, ry, cw, row_h), Qt.AlignVCenter | Qt.AlignRight, str(total))
         return Item(h, draw)
 
-    def pill(self, p, x, cy, s, px=13):
+    def pill(self, p, x, cy, s, px=13, color=None):
+        """A rounded tag; `color` (a theme colour like "good") tints it."""
         f = font(px)
         w = QFontMetrics(f).horizontalAdvance(s) + 20
         p.setPen(Qt.NoPen)
-        p.setBrush(self.c("pill"))
+        if color:
+            tint = QColor(self.c(color))
+            tint.setAlpha(40)
+            p.setBrush(tint)
+        else:
+            p.setBrush(self.c("pill"))
         p.drawRoundedRect(QRectF(x, cy - 12, w, 24), 12, 12)
-        p.setPen(self.c("pill_ink"))
+        p.setPen(self.c(color) if color else self.c("pill_ink"))
         p.setFont(f)
         p.drawText(QRectF(x, cy - 12, w, 24), Qt.AlignCenter, s)
         return w
@@ -343,7 +349,7 @@ class Kit:
                 firsts[k].draw(p, x, cy - firsts[k].h / 2)
                 tx = x + first_w
                 if r.get("tag"):
-                    self.pill(p, tx, cy, r["tag"])
+                    self.pill(p, tx, cy, r["tag"], color=r.get("tag_color"))
                     tx += tag_w + 14
                 avail = x + width - right_w - 16 - tx
                 main = " ".join((r.get("text") or "").split())
@@ -768,7 +774,7 @@ class Painter(es.Renderer):
                          ("Efforts tested", len(tested), f"{len(active)} active in JIRA", "ink")], width))
         jira = lambda key, label: self.link(label, f"{changelog.JIRA_SITE}/browse/{key}")
         hidden = ft.hidden_instruments(self.data.get("settings"))
-        insts = [i for i in ft.instruments(testing, ctx.rng, keep) if i["open"] and i["key"] not in hidden] \
+        insts = [i for i in ft.instruments(testing, ctx.rng, keep) if i["key"] not in hidden] \
             if self.opt("testing", "instruments") else []
         if insts:
             rows = []
@@ -777,9 +783,18 @@ class Painter(es.Renderer):
                 last_d = (f"last tested {date.fromisoformat(inst['last'][1]['date']):%b %-d}" if inst["last"]
                           else "not tested")
                 n = len(inst["open"])
-                rows.append(dict(link_html=name, tag="HW Support Requested",
-                                 text=f"{n} open support request{'s' if n != 1 else ''}",
-                                 note=", ".join(r["key"] for r in inst["open"]), right=last_d, right_color="ink2"))
+                if n:
+                    rows.append(dict(link_html=name, tag="HW Support Requested", tag_color="warn",
+                                     text=f"{n} open support request{'s' if n != 1 else ''}",
+                                     note=", ".join(r["key"] for r in inst["open"]), right=last_d, right_color="ink2"))
+                elif inst["logged"]:              # a ticket logged in these dates, already closed
+                    m = len(inst["logged"])
+                    rows.append(dict(link_html=name, tag="HW Support Closed",
+                                     text=f"{m} support request{'s' if m != 1 else ''} in these dates · closed",
+                                     note=", ".join(r["key"] for r in inst["logged"]), right=last_d, right_color="ink2"))
+                else:                             # no hardware tickets in these dates, none still open
+                    rows.append(dict(link_html=name, tag="Functional", tag_color="good",
+                                     text="no hardware support requests", right=last_d, right_color="ink2"))
             body.append(vstack([k.label("Instruments", width), k.table(rows, width)], 6))
         if self.opt("testing", "sessions"):
             if shown:

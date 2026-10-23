@@ -1,5 +1,13 @@
 # What's new
 
+## 2.3.6
+- **Export: Instruments shows each instrument used in the dates.**
+  - **Functional** (green): no hardware support request logged in these dates and none still open.
+  - **HW Support Requested** (amber): with how many requests are open.
+  - **HW Support Closed**: a request was logged in these dates but it's closed now.
+
+  Hidden instruments stay hidden. The app's Feature Testing tab still lists only instruments with open requests.
+
 ## 2.3.5
 - **Fix: Failed Runs in the export said "same day" for a continued error.** A run that continues an earlier one ("Continued from Run#") is now timed from the first run of that error, and counts as fixed only once every failed run in it is resolved — e.g. runs #63 and #64, continuing #20 (Oct 2) and resolved Oct 23, show **fixed in 21 days** and **continued from #20**.
 
