@@ -49,7 +49,7 @@ import ui_theme
 import views
 
 APP_TITLE   = "Test Tracker"
-APP_VERSION = "2.3.7"         # bump this for each release, then push a matching tag (v2.3.7)
+APP_VERSION = "2.3.8"         # bump this for each release, then push a matching tag (v2.3.8)
 APP_CHANNEL = "stable"        # "stable" or "testing": testing releases are published as GitHub
                               # pre-releases, so the ⬆ Update button on stable copies never offers them
 REFRESH_MS  = 60_000          # pull changes from the sheet every minute
@@ -4230,6 +4230,7 @@ class Dashboard(QScrollArea):
         self.setFrameShape(QFrame.NoFrame)
         self.body = None
         self.range, self.range_text = None, "All dates"     # set by the DateBar
+        self.show_empty = False                    # show cards that have nothing in the dates
 
     # ── date range ────────────────────────────────────────────────────────────
 
@@ -4302,10 +4303,14 @@ class Dashboard(QScrollArea):
         head.addWidget(_small_label(f"Data as of {when} · hover over a chart for details, click it "
                                     "to see those rows", MUTED), 1, Qt.AlignBottom)
         root.addLayout(head)
+        notice = QVBoxLayout()                     # "No Viking runs in …" goes here, at the top
+        root.addLayout(notice)
+        self._hidden, self._no_runs = 0, []
 
         view = self.win.current_view()
         if view is not None:                       # a custom view: just its cards
             self._view_cards(root, data, view)
+            self._notice(notice)
             root.addStretch(1)
             self.setWidget(body)
             self.body = body
@@ -4326,11 +4331,14 @@ class Dashboard(QScrollArea):
             for card in lo["cards"]:
                 if not card["dash"] or (card["id"] == "analysis" and not _visible_rows(tab)):
                     continue
+                if self._skip(tab, card):
+                    continue
                 try:
                     root.addWidget(self._card(tab, card, lo))
                 except Exception as exc:          # a broken layout shows a note, not a crash
                     root.addWidget(_small_label(f"Couldn't draw {layout.card_title(tab, card)}: "
                                                 f"{type(exc).__name__}: {exc}", RED))
+        self._notice(notice)
         root.addStretch(1)
         self.setWidget(body)
         self.body = body
@@ -4356,11 +4364,71 @@ class Dashboard(QScrollArea):
             root.addWidget(box)
             return
         for tab, card, lo, entry in got:
+            if self._skip(tab, card):
+                continue
             try:
                 root.addWidget(self._card(tab, card, lo, linked="ref" in entry))
             except Exception as exc:
                 root.addWidget(_small_label(f"Couldn't draw {layout.card_title(tab, card)}: "
                                             f"{type(exc).__name__}: {exc}", RED))
+
+    # ── empty cards ───────────────────────────────────────────────────────────
+
+    def _no_runs_in_dates(self, tab):
+        return store.is_run_tab(tab) and self._dated(tab) and not self._rows(tab)
+
+    def _skip(self, tab, card):
+        """Leave out a card with nothing to show in the dates: a run tab's cards when it has no
+        runs (one line at the top says so), and an Error Analysis with no errors — it stays
+        while an earlier error is still unresolved. "show" brings them back; never while editing."""
+        if self.show_empty or self.is_editing(tab, card):
+            return False
+        ctx = blocks.Ctx(self.range, self.range_text, export=False, settings=_settings(self.win),
+                         data=self.win.data)
+        empty = card["id"] == "analysis" and self._draws_nothing(tab, card, ctx)
+        if self._no_runs_in_dates(tab):
+            name = blocks.short_name(tab["title"])
+            if name not in self._no_runs:
+                self._no_runs.append(name)
+            empty = empty or card["id"] != "analysis"
+        if empty:
+            self._hidden += 1
+        return empty
+
+    def _draws_nothing(self, tab, card, ctx):
+        for b in card["blocks"]:
+            if not b["dash"]:
+                continue
+            try:
+                if blocks.render(b, [tab], ctx):
+                    return False
+            except Exception:
+                return False                    # a broken chart shows its error, so keep the card
+        return True
+
+    def _notice(self, box):
+        """The line at the top: which products had no runs, and how many cards are hidden."""
+        if not (self._hidden or self.show_empty):
+            return
+        if self.show_empty:
+            text = "Showing every card, even those with nothing in these dates · "
+            link = '<a href="hide">hide them</a>'
+        else:
+            bits = [f"No {' or '.join(self._no_runs)} runs in {html.escape(self.range_text)}"] if self._no_runs else []
+            bits.append(f"{self._hidden} card{'s' if self._hidden != 1 else ''} with nothing to show "
+                        f"{'is' if self._hidden == 1 else 'are'} hidden")
+            text = " · ".join(bits) + " · "
+            link = '<a href="show">show</a>'
+        lbl = QLabel(text + link)
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setStyleSheet(f"color:{MUTED}; font-size:13px;")
+        lbl.linkActivated.connect(self._toggle_empty)
+        box.addWidget(lbl)
+
+    def _toggle_empty(self, href):
+        self.show_empty = href == "show"
+        if self.win.data:
+            self.set_data(self.win.data)
 
     def _tile(self, tab):
         rows = self._rows(tab)

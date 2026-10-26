@@ -1,5 +1,11 @@
 # What's new
 
+## 2.3.8
+- **Dashboard hides cards with nothing to show in the dates.**
+  - **A run tracker with no runs in the dates:** its cards are hidden, and a line at the top says so (e.g. *No Viking runs in Mon Oct 26*).
+  - **An Error Analysis with no errors:** hidden. It stays while an earlier error is still unresolved.
+  - **show** on that line brings every card back (to edit one, for example); **hide them** puts them away again. A card being edited is never hidden.
+
 ## 2.3.7
 - **Export: All Bugs By Status** is now at the top of each product's New Bugs, above the list.
 - **Export: What We Tested with All dates** is a summary instead of every session: one line (sessions, efforts, dates, testers, new bugs, HW requests), then each test effort with its number of sessions, testers, dates, new bugs and HW requests. Other date ranges still list each session.
